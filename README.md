@@ -2,6 +2,13 @@
 
 English | [日本語](README.ja.md)
 
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.svg)](https://www.nuget.org/packages/CobaltumOrm)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.svg)](https://www.nuget.org/packages/CobaltumOrm.Migrations)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.PostgreSql.svg)](https://www.nuget.org/packages/CobaltumOrm.Migrations.PostgreSql)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.SourceGenerator.svg)](https://www.nuget.org/packages/CobaltumOrm.SourceGenerator)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Tool.svg)](https://www.nuget.org/packages/CobaltumOrm.Tool)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Templates.svg)](https://www.nuget.org/packages/CobaltumOrm.Templates)
+
 CobaltumORM is a .NET / C# ORM whose main target is PostgreSQL. Its migration system and
 compile-time SQL analysis support PostgreSQL, MySQL, SQLite, SQL Server, and Oracle.
 

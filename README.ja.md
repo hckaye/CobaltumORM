@@ -2,6 +2,13 @@
 
 [English](README.md) | 日本語
 
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.svg)](https://www.nuget.org/packages/CobaltumOrm)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.svg)](https://www.nuget.org/packages/CobaltumOrm.Migrations)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.PostgreSql.svg)](https://www.nuget.org/packages/CobaltumOrm.Migrations.PostgreSql)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.SourceGenerator.svg)](https://www.nuget.org/packages/CobaltumOrm.SourceGenerator)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Tool.svg)](https://www.nuget.org/packages/CobaltumOrm.Tool)
+[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Templates.svg)](https://www.nuget.org/packages/CobaltumOrm.Templates)
+
 CobaltumORM は PostgreSQL を主な対象とする .NET / C# 向け ORM です。マイグレーションとコンパイル時の SQL 解析は、PostgreSQL、MySQL、SQLite、SQL Server、Oracle に対応しています。
 
 ## 目次
