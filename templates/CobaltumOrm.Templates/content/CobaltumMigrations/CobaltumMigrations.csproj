@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>CobaltumMigrations</RootNamespace>
+    <CobaltumOrmMigrationProject>true</CobaltumOrmMigrationProject>
+    <CobaltumOrmGeneratedNamespace>CobaltumMigrations.Generated</CobaltumOrmGeneratedNamespace>
+    <UserSecretsId>5b04a918-37d5-4fbf-b1d2-a58081ff96d8</UserSecretsId>
+    <!--#if (provider == "PostgreSql") -->
+    <CobaltumOrmDatabaseProvider>PostgreSql</CobaltumOrmDatabaseProvider>
+    <!--#elseif (provider == "MySql") -->
+    <CobaltumOrmDatabaseProvider>MySql</CobaltumOrmDatabaseProvider>
+    <!--#elseif (provider == "Sqlite") -->
+    <CobaltumOrmDatabaseProvider>Sqlite</CobaltumOrmDatabaseProvider>
+    <!--#elseif (provider == "SqlServer") -->
+    <CobaltumOrmDatabaseProvider>SqlServer</CobaltumOrmDatabaseProvider>
+    <!--#elseif (provider == "Oracle") -->
+    <CobaltumOrmDatabaseProvider>Oracle</CobaltumOrmDatabaseProvider>
+    <!--#endif -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CobaltumOrm" Version="0.0.1" />
+    <PackageReference Include="CobaltumOrm.Migrations" Version="0.0.1" />
+    <PackageReference Include="CobaltumOrm.SourceGenerator"
+                      Version="0.0.1"
+                      PrivateAssets="all" />
+    <!--#if (provider == "PostgreSql") -->
+    <PackageReference Include="CobaltumOrm.Migrations.PostgreSql" Version="0.0.1" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <!--#elseif (provider == "MySql") -->
+    <PackageReference Include="CobaltumOrm.Migrations.MySql" Version="0.0.1" />
+    <PackageReference Include="MySqlConnector" Version="2.4.0" />
+    <!--#elseif (provider == "Sqlite") -->
+    <PackageReference Include="CobaltumOrm.Migrations.Sqlite" Version="0.0.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+    <PackageReference Include="SQLitePCLRaw.core" Version="2.1.12" />
+    <!--#elseif (provider == "SqlServer") -->
+    <PackageReference Include="CobaltumOrm.Migrations.SqlServer" Version="0.0.1" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
+    <!--#elseif (provider == "Oracle") -->
+    <PackageReference Include="CobaltumOrm.Migrations.Oracle" Version="0.0.1" />
+    <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.300" />
+    <!--#endif -->
+    <AdditionalFiles Include="Migrations/V*__*.sql" />
+    <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
+    <CompilerVisibleProperty Include="CobaltumOrmDatabaseProvider" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings*.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest"
+          TargetPath="CobaltumOrm.Migrations/$(AssemblyName)/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

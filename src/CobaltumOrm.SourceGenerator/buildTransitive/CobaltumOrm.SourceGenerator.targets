@@ -1,0 +1,79 @@
+<Project>
+  <PropertyGroup>
+    <CobaltumOrmDatabaseProvider Condition="'$(CobaltumOrmDatabaseProvider)' == ''">PostgreSql</CobaltumOrmDatabaseProvider>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <CompilerVisibleProperty Include="CobaltumOrmDatabaseProvider" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <CobaltumOrmCompilerTaskAssembly Condition="'$(CobaltumOrmCompilerTaskAssembly)' == ''">$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'tools', 'netstandard2.0', 'CobaltumOrm.Compiler.dll'))</CobaltumOrmCompilerTaskAssembly>
+  </PropertyGroup>
+
+  <UsingTask TaskName="CobaltumOrm.Compiler.CobaltumOrmTransformTask"
+             AssemblyFile="$(CobaltumOrmCompilerTaskAssembly)" />
+
+  <Target Name="CobaltumOrmGetMigrationInputs"
+          Returns="@(_CobaltumOrmMigrationInput)">
+    <Error Condition="'$(CobaltumOrmMigrationProject)' != 'true'"
+           Text="Project '$(MSBuildProjectFullPath)' must set CobaltumOrmMigrationProject to true before it can be used as a CobaltumOrmMigrationProjectReference." />
+    <ItemGroup>
+      <_CobaltumOrmMigrationInput Include="$(MSBuildProjectDirectory)/Migrations/**/*.cs">
+        <CobaltumOrmInputKind>CSharp</CobaltumOrmInputKind>
+      </_CobaltumOrmMigrationInput>
+      <_CobaltumOrmMigrationInput Include="$(MSBuildProjectDirectory)/Migrations/V*__*.sql">
+        <CobaltumOrmInputKind>Sql</CobaltumOrmInputKind>
+      </_CobaltumOrmMigrationInput>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CobaltumOrmResolveMigrationProjectInputs"
+          Condition="'@(CobaltumOrmMigrationProjectReference)' != ''">
+    <MSBuild Projects="@(CobaltumOrmMigrationProjectReference)"
+             Targets="CobaltumOrmGetMigrationInputs"
+             BuildInParallel="true"
+             Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_CobaltumOrmMigrationProjectInput" />
+    </MSBuild>
+    <ItemGroup>
+      <_CobaltumOrmExternalMigrationSource Include="@(_CobaltumOrmMigrationProjectInput)"
+                                           Condition="'%(CobaltumOrmInputKind)' == 'CSharp' and Exists('%(FullPath)')" />
+      <_CobaltumOrmExternalMigrationSql Include="@(_CobaltumOrmMigrationProjectInput)"
+                                        Condition="'%(CobaltumOrmInputKind)' == 'Sql' and Exists('%(FullPath)')" />
+      <AdditionalFiles Include="@(_CobaltumOrmExternalMigrationSource);@(_CobaltumOrmExternalMigrationSql)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CobaltumOrmTransformSources"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="ResolveReferences;CobaltumOrmResolveMigrationProjectInputs"
+          Condition="'$(CobaltumOrmCompileTimeQueries)' != 'false'">
+    <PropertyGroup>
+      <CobaltumOrmIntermediateOutputPath Condition="'$(CobaltumOrmIntermediateOutputPath)' == ''">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'CobaltumOrm'))</CobaltumOrmIntermediateOutputPath>
+    </PropertyGroup>
+    <ItemGroup>
+      <_CobaltumOrmInputSource Include="@(Compile)"
+                               Condition="'%(Compile.Extension)' == '.cs' and '%(Compile.AutoGen)' != 'true' and '%(Compile.DesignTime)' != 'true' and '%(Compile.CobaltumOrmTransformed)' != 'true'" />
+    </ItemGroup>
+
+    <CobaltumOrmTransformTask Sources="@(_CobaltumOrmInputSource)"
+                              MigrationSources="@(_CobaltumOrmExternalMigrationSource)"
+                              References="@(ReferencePath)"
+                              AdditionalFiles="@(AdditionalFiles)"
+                              OutputDirectory="$(CobaltumOrmIntermediateOutputPath)"
+                              DefineConstants="$(DefineConstants)"
+                              LangVersion="$(LangVersion)"
+                              Nullable="$(Nullable)"
+                              GeneratedNamespace="$(CobaltumOrmGeneratedNamespace)"
+                              CobaltumOrmDatabaseProvider="$(CobaltumOrmDatabaseProvider)">
+      <Output TaskParameter="ProcessedSources" ItemName="_CobaltumOrmProcessedSource" />
+      <Output TaskParameter="TransformedSources" ItemName="_CobaltumOrmTransformedSource" />
+    </CobaltumOrmTransformTask>
+
+    <ItemGroup>
+      <Compile Remove="@(_CobaltumOrmProcessedSource)" />
+      <Compile Include="@(_CobaltumOrmTransformedSource)" />
+    </ItemGroup>
+  </Target>
+</Project>

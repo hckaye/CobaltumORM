@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>CobaltumOrm.Compiler</RootNamespace>
+    <AssemblyName>CobaltumOrm.Compiler</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NoWarn>$(NoWarn);CS1591;RS2008</NoWarn>
+    <DefineConstants>$(DefineConstants);COBALTUM_COMPILER_TASK</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Build.Framework" Version="17.14.28" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Utilities.Core" Version="17.14.28" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../CobaltumOrm.Analysis/*.cs" Link="Analysis/%(Filename)%(Extension)" />
+    <Compile Include="../CobaltumOrm.SourceGenerator/*.cs" Link="SourceGenerator/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <CobaltumOrmGeneratedNamespace>CobaltumOrm.PostgreSql.E2E.Tests.Generated</CobaltumOrmGeneratedNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.13.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/CobaltumOrm/CobaltumOrm.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.Migrations/CobaltumOrm.Migrations.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.Migrations.PostgreSql/CobaltumOrm.Migrations.PostgreSql.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.SourceGenerator/CobaltumOrm.SourceGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/CobaltumOrm.Compiler/CobaltumOrm.Compiler.csproj"
+                      ReferenceOutputAssembly="false" />
+    <AdditionalFiles Include="Migrations/V*__*.sql" />
+    <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <CobaltumOrmCompilerTaskAssembly>$(MSBuildThisFileDirectory)../../src/CobaltumOrm.Compiler/bin/$(Configuration)/netstandard2.0/CobaltumOrm.Compiler.dll</CobaltumOrmCompilerTaskAssembly>
+  </PropertyGroup>
+  <Import Project="../../src/CobaltumOrm.SourceGenerator/buildTransitive/CobaltumOrm.SourceGenerator.targets" />
+</Project>

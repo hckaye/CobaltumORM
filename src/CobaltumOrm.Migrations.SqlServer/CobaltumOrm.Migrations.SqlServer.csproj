@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;netstandard2.1;net8.0;net10.0</TargetFrameworks>
+    <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
+    <RootNamespace>CobaltumOrm.Migrations.SqlServer</RootNamespace>
+    <AssemblyName>CobaltumOrm.Migrations.SqlServer</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../CobaltumOrm.Analysis/CobaltumOrm.Analysis.csproj" />
+    <ProjectReference Include="../CobaltumOrm.Migrations/CobaltumOrm.Migrations.csproj" />
+  </ItemGroup>
+</Project>

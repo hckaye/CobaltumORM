@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <Version>0.0.1</Version>
+    <Authors>CobaltumORM contributors</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

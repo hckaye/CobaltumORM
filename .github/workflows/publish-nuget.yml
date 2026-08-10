@@ -1,0 +1,73 @@
+name: Publish NuGet packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build, test, and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Verify tag version
+        shell: bash
+        run: |
+          package_version="$(dotnet msbuild src/CobaltumOrm/CobaltumOrm.csproj -getProperty:Version -nologo)"
+          tag_version="${GITHUB_REF_NAME#v}"
+
+          if [[ "${tag_version}" != "${package_version}" ]]; then
+            echo "Tag version ${tag_version} does not match package version ${package_version}." >&2
+            exit 1
+          fi
+
+      - name: Restore
+        run: dotnet restore CobaltumOrm.sln
+
+      - name: Build
+        run: dotnet build CobaltumOrm.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test CobaltumOrm.sln --configuration Release --no-build --no-restore
+
+      - name: Pack
+        shell: bash
+        run: |
+          projects=(
+            src/CobaltumOrm/CobaltumOrm.csproj
+            src/CobaltumOrm.Migrations/CobaltumOrm.Migrations.csproj
+            src/CobaltumOrm.Migrations.PostgreSql/CobaltumOrm.Migrations.PostgreSql.csproj
+            src/CobaltumOrm.SourceGenerator/CobaltumOrm.SourceGenerator.csproj
+            src/CobaltumOrm.Tool/CobaltumOrm.Tool.csproj
+            templates/CobaltumOrm.Templates/CobaltumOrm.Templates.csproj
+          )
+
+          for project in "${projects[@]}"; do
+            dotnet pack "${project}" \
+              --configuration Release \
+              --no-build \
+              --no-restore \
+              --output artifacts/packages
+          done
+
+      - name: Publish to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push "artifacts/packages/*.nupkg"
+          --api-key "${NUGET_API_KEY}"
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <PackageId>CobaltumOrm.Templates</PackageId>
+    <IsPackable>true</IsPackable>
+    <Authors>CobaltumORM contributors</Authors>
+    <Description>Project templates for CobaltumORM.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageType>Template</PackageType>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <PackageOutputPath>../../.packages</PackageOutputPath>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <Compile Remove="content/**/*.cs" />
+    <None Remove="content/**/*" />
+    <Content Include="content/**/*"
+             Pack="true"
+             PackagePath="content" />
+  </ItemGroup>
+</Project>

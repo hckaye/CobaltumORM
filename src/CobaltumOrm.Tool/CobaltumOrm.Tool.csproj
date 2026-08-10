@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>CobaltumOrm.Tool</RootNamespace>
+    <AssemblyName>CobaltumOrm.Tool</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>cobaltum</ToolCommandName>
+    <PackageId>CobaltumOrm.Tool</PackageId>
+    <IsPackable>true</IsPackable>
+    <Authors>CobaltumORM contributors</Authors>
+    <Description>Command-line migration management for CobaltumORM.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>../../.packages</PackageOutputPath>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../templates/CobaltumOrm.Templates/content/CobaltumMigrations/CobaltumMigrations.csproj"
+                      LogicalName="CobaltumOrm.Tool.Templates.CobaltumMigrations.csproj" />
+    <EmbeddedResource Include="../../templates/CobaltumOrm.Templates/content/CobaltumMigrations/Program.cs"
+                      LogicalName="CobaltumOrm.Tool.Templates.Program.cs" />
+    <EmbeddedResource Include="../../templates/CobaltumOrm.Templates/content/CobaltumMigrations/appsettings.json"
+                      LogicalName="CobaltumOrm.Tool.Templates.appsettings.json" />
+    <EmbeddedResource Include="../../templates/CobaltumOrm.Templates/content/CobaltumMigrations/README.md"
+                      LogicalName="CobaltumOrm.Tool.Templates.README.md" />
+    <EmbeddedResource Include="../../templates/CobaltumOrm.Templates/content/CobaltumMigrations/Migrations/README.md"
+                      LogicalName="CobaltumOrm.Tool.Templates.Migrations.README.md" />
+  </ItemGroup>
+</Project>

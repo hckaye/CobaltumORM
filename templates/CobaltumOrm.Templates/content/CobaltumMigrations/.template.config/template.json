@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "CobaltumORM contributors",
+  "classifications": [
+    "Database",
+    "Migrations",
+    "PostgreSQL",
+    "MySQL",
+    "SQLite",
+    "SQL Server",
+    "Oracle"
+  ],
+  "identity": "CobaltumOrm.Templates.Migrations",
+  "name": "CobaltumORM migration project",
+  "shortName": "cobaltum-migrations",
+  "sourceName": "CobaltumMigrations",
+  "preferNameDirectory": true,
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "guids": [
+    "5b04a918-37d5-4fbf-b1d2-a58081ff96d8"
+  ],
+  "symbols": {
+    "framework": {
+      "type": "parameter",
+      "datatype": "choice",
+      "description": "The target framework for the migration project.",
+      "defaultValue": "net8.0",
+      "replaces": "net8.0",
+      "choices": [
+        {
+          "choice": "net8.0",
+          "description": ".NET 8"
+        },
+        {
+          "choice": "net9.0",
+          "description": ".NET 9"
+        },
+        {
+          "choice": "net10.0",
+          "description": ".NET 10"
+        }
+      ]
+    },
+    "provider": {
+      "type": "parameter",
+      "datatype": "choice",
+      "description": "The database provider for the migration project.",
+      "defaultValue": "PostgreSql",
+      "choices": [
+        {
+          "choice": "PostgreSql",
+          "description": "PostgreSQL"
+        },
+        {
+          "choice": "MySql",
+          "description": "MySQL"
+        },
+        {
+          "choice": "Sqlite",
+          "description": "SQLite"
+        },
+        {
+          "choice": "SqlServer",
+          "description": "SQL Server"
+        },
+        {
+          "choice": "Oracle",
+          "description": "Oracle"
+        }
+      ]
+    }
+  },
+  "primaryOutputs": [
+    {
+      "path": "CobaltumMigrations.csproj"
+    }
+  ]
+}

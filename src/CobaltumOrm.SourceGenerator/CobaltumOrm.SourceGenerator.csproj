@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>CobaltumOrm.SourceGenerator</RootNamespace>
+    <AssemblyName>CobaltumOrm.SourceGenerator</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;RS2008</NoWarn>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <PackageId>CobaltumOrm.SourceGenerator</PackageId>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <DevelopmentDependency>true</DevelopmentDependency>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../CobaltumOrm.Compiler/CobaltumOrm.Compiler.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- An analyzer ProjectReference supplies the generator DLL, not arbitrary
+         transitive analyzer dependencies. Keep the generator loadable by a
+         normal MSBuild consumer without a separate Analysis DLL beside it. -->
+    <Compile Include="../CobaltumOrm.Analysis/*.cs"
+             Link="Analysis/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(OutputPath)$(AssemblyName).dll"
+          Pack="true"
+          PackagePath="analyzers/dotnet/cs" />
+    <None Include="buildTransitive/CobaltumOrm.SourceGenerator.targets"
+          Pack="true"
+          PackagePath="buildTransitive" />
+  </ItemGroup>
+  <Target Name="IncludeCobaltumOrmCompilerInPackage" BeforeTargets="_GetPackageFiles">
+    <ItemGroup>
+      <None Include="../CobaltumOrm.Compiler/bin/$(Configuration)/netstandard2.0/*.dll"
+            Pack="true"
+            PackagePath="tools/netstandard2.0" />
+    </ItemGroup>
+  </Target>
+</Project>
