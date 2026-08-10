@@ -13,6 +13,9 @@ jobs:
     name: Build, test, and publish
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Check out repository
@@ -63,11 +66,15 @@ jobs:
               --output artifacts/packages
           done
 
+      - name: NuGet login (OIDC)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: hckaye
+
       - name: Publish to NuGet.org
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: >-
           dotnet nuget push "artifacts/packages/*.nupkg"
-          --api-key "${NUGET_API_KEY}"
+          --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
