@@ -2,12 +2,16 @@
 
 English | [日本語](README.ja.md)
 
-[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.svg)](https://www.nuget.org/packages/CobaltumOrm)
-[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.svg)](https://www.nuget.org/packages/CobaltumOrm.Migrations)
-[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.PostgreSql.svg)](https://www.nuget.org/packages/CobaltumOrm.Migrations.PostgreSql)
-[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.SourceGenerator.svg)](https://www.nuget.org/packages/CobaltumOrm.SourceGenerator)
-[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Tool.svg)](https://www.nuget.org/packages/CobaltumOrm.Tool)
-[![NuGet](https://img.shields.io/nuget/v/CobaltumOrm.Templates.svg)](https://www.nuget.org/packages/CobaltumOrm.Templates)
+[![CobaltumOrm](https://img.shields.io/nuget/v/CobaltumOrm.svg?label=CobaltumOrm)](https://www.nuget.org/packages/CobaltumOrm)
+[![CobaltumOrm.Migrations](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.svg?label=CobaltumOrm.Migrations)](https://www.nuget.org/packages/CobaltumOrm.Migrations)
+[![CobaltumOrm.Migrations.MySql](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.MySql.svg?label=CobaltumOrm.Migrations.MySql)](https://www.nuget.org/packages/CobaltumOrm.Migrations.MySql)
+[![CobaltumOrm.Migrations.Oracle](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.Oracle.svg?label=CobaltumOrm.Migrations.Oracle)](https://www.nuget.org/packages/CobaltumOrm.Migrations.Oracle)
+[![CobaltumOrm.Migrations.PostgreSql](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.PostgreSql.svg?label=CobaltumOrm.Migrations.PostgreSql)](https://www.nuget.org/packages/CobaltumOrm.Migrations.PostgreSql)
+[![CobaltumOrm.Migrations.Sqlite](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.Sqlite.svg?label=CobaltumOrm.Migrations.Sqlite)](https://www.nuget.org/packages/CobaltumOrm.Migrations.Sqlite)
+[![CobaltumOrm.Migrations.SqlServer](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.SqlServer.svg?label=CobaltumOrm.Migrations.SqlServer)](https://www.nuget.org/packages/CobaltumOrm.Migrations.SqlServer)
+[![CobaltumOrm.SourceGenerator](https://img.shields.io/nuget/v/CobaltumOrm.SourceGenerator.svg?label=CobaltumOrm.SourceGenerator)](https://www.nuget.org/packages/CobaltumOrm.SourceGenerator)
+[![CobaltumOrm.Tool](https://img.shields.io/nuget/v/CobaltumOrm.Tool.svg?label=CobaltumOrm.Tool)](https://www.nuget.org/packages/CobaltumOrm.Tool)
+[![CobaltumOrm.Templates](https://img.shields.io/nuget/v/CobaltumOrm.Templates.svg?label=CobaltumOrm.Templates)](https://www.nuget.org/packages/CobaltumOrm.Templates)
 
 CobaltumORM is a .NET / C# ORM whose main target is PostgreSQL. Its migration system and
 compile-time SQL analysis support PostgreSQL, MySQL, SQLite, SQL Server, and Oracle.
