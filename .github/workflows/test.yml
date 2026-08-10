@@ -1,0 +1,60 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore CobaltumOrm.sln
+
+      - name: Build
+        run: dotnet build CobaltumOrm.sln --configuration Release --no-restore
+
+      - name: Test
+        run: >-
+          dotnet test CobaltumOrm.sln
+          --configuration Release
+          --no-build
+          --no-restore
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFileName=test-results.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory test-results
+
+      - name: Publish test report
+        if: always()
+        uses: dorny/test-reporter@v3
+        with:
+          name: Test results
+          path: "test-results/**/*.trx"
+          reporter: dotnet-trx
+          fail-on-error: false
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: "test-results/**/coverage.cobertura.xml"
+          if-no-files-found: ignore
