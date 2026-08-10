@@ -68,18 +68,46 @@ internal static class GeneratorTestHost
 
     private static ImmutableArray<MetadataReference> NetStandardReferences()
     {
-        var packageRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".nuget",
-            "packages",
-            "netstandard.library",
-            "2.0.0",
-            "build",
-            "netstandard2.0",
-            "ref");
+        var packageRoot = ResolveNetStandardLibraryRefRoot();
         var references = Directory.EnumerateFiles(packageRoot, "*.dll")
             .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path));
         return references.Concat(ProjectReferences(true)).Distinct(MetadataReferencePathComparer.Instance).ToImmutableArray();
+    }
+
+    private static string ResolveNetStandardLibraryRefRoot()
+    {
+        // The repository NuGet.Config overrides the global packages folder to a local .packages directory,
+        // and the restored NETStandard.Library version may differ from the one originally pinned (e.g. 2.0.3 vs 2.0.0).
+        // Search each candidate packages root for any version that provides the netstandard2.0 ref assemblies.
+        var candidatePackagesRoots = new[]
+        {
+            Path.Combine(FindRepositoryRoot(), ".packages"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages"),
+        };
+
+        foreach (var packagesRoot in candidatePackagesRoots)
+        {
+            var libraryRoot = Path.Combine(packagesRoot, "netstandard.library");
+            if (!Directory.Exists(libraryRoot))
+            {
+                continue;
+            }
+
+            foreach (var versionDir in Directory.EnumerateDirectories(libraryRoot)
+                         .OrderByDescending(dir => dir, StringComparer.OrdinalIgnoreCase))
+            {
+                var refRoot = Path.Combine(versionDir, "build", "netstandard2.0", "ref");
+                if (Directory.Exists(refRoot) && Directory.EnumerateFiles(refRoot, "*.dll").Any())
+                {
+                    return refRoot;
+                }
+            }
+        }
+
+        throw new DirectoryNotFoundException(
+            "Could not locate the NETStandard.Library ref assemblies for netstandard2.0. " +
+            $"Searched under: {string.Join(", ", candidatePackagesRoots)}. " +
+            "Run 'dotnet restore tests/CobaltumOrm.SourceGenerator.Tests' first.");
     }
 
     private static IEnumerable<MetadataReference> ProjectReferences(bool netStandard20)
