@@ -52,7 +52,11 @@ jobs:
           projects=(
             src/CobaltumOrm/CobaltumOrm.csproj
             src/CobaltumOrm.Migrations/CobaltumOrm.Migrations.csproj
+            src/CobaltumOrm.Migrations.MySql/CobaltumOrm.Migrations.MySql.csproj
+            src/CobaltumOrm.Migrations.Oracle/CobaltumOrm.Migrations.Oracle.csproj
             src/CobaltumOrm.Migrations.PostgreSql/CobaltumOrm.Migrations.PostgreSql.csproj
+            src/CobaltumOrm.Migrations.Sqlite/CobaltumOrm.Migrations.Sqlite.csproj
+            src/CobaltumOrm.Migrations.SqlServer/CobaltumOrm.Migrations.SqlServer.csproj
             src/CobaltumOrm.SourceGenerator/CobaltumOrm.SourceGenerator.csproj
             src/CobaltumOrm.Tool/CobaltumOrm.Tool.csproj
             templates/CobaltumOrm.Templates/CobaltumOrm.Templates.csproj
