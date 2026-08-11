@@ -22,25 +22,48 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
             throw new ArgumentNullException(nameof(operation));
         }
 
+        if (AdvancedMigrationSqlGenerator.TryGenerateConditional(
+            operation, AdvancedMigrationProvider.PostgreSql, GenerateCommands, out var conditionalCommands))
+            return conditionalCommands;
+
         if (operation is CreateTableOperation createTable)
         {
-            return One(GenerateCreateTable(createTable));
+            return WithColumnIndexes(
+                GenerateCreateTable(createTable),
+                createTable.Columns,
+                createTable.TableName,
+                createTable.SchemaName,
+                createTable.Description);
         }
 
         if (operation is AddColumnOperation addColumn)
         {
-            return One(GenerateAddColumn(addColumn));
+            return WithColumnIndexes(
+                GenerateAddColumn(addColumn),
+                new[] { addColumn.Column },
+                addColumn.TableName,
+                addColumn.SchemaName,
+                null);
         }
 
         if (operation is AlterColumnOperation alterColumn)
         {
-            return GenerateAlterColumn(alterColumn);
+            var commands = new List<MigrationCommand>(GenerateAlterColumn(alterColumn));
+            commands.AddRange(AdvancedMigrationSqlGenerator.GenerateAlterColumnAuxiliaryCommands(
+                alterColumn.Column,
+                alterColumn.TableName,
+                alterColumn.SchemaName,
+                AdvancedMigrationProvider.PostgreSql,
+                QuoteIdentifier,
+                Qualify));
+            return commands.AsReadOnly();
         }
 
         if (operation is DeleteTableOperation deleteTable)
         {
             return One(new MigrationCommand(
-                $"DROP TABLE {Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
+                $"DROP TABLE{(deleteTable.IfExists ? " IF EXISTS" : string.Empty)} " +
+                $"{Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
         }
 
         if (operation is DeleteColumnOperation deleteColumn)
@@ -68,6 +91,16 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
         if (operation is ExecuteSqlOperation executeSql)
         {
             return One(new MigrationCommand(executeSql.Sql));
+        }
+
+        if (AdvancedMigrationSqlGenerator.TryGenerate(
+            operation,
+            AdvancedMigrationProvider.PostgreSql,
+            QuoteIdentifier,
+            Qualify,
+            out var advancedCommands))
+        {
+            return advancedCommands;
         }
 
         throw new NotSupportedException(
@@ -158,6 +191,11 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
                 throw new MigrationValidationException("The schema preview command collection contains null.");
             }
 
+            if (!command.AnalyzeForSchema)
+            {
+                continue;
+            }
+
             var result = PostgreSqlSchemaBuilder.ApplyScript(schema, command.CommandText);
             if (result.HasErrors)
             {
@@ -237,21 +275,24 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
         }
 
         return new MigrationCommand(
-            $"CREATE TABLE {Qualify(operation.SchemaName, operation.TableName)} " +
+            $"CREATE TABLE{(operation.IfNotExists ? " IF NOT EXISTS" : string.Empty)} " +
+            $"{Qualify(operation.SchemaName, operation.TableName)} " +
             $"({string.Join(", ", columns)});");
     }
 
     private MigrationCommand GenerateAddColumn(AddColumnOperation operation)
     {
         return new MigrationCommand(
-            $"ALTER TABLE {Qualify(operation.SchemaName, operation.TableName)} " +
+            $"ALTER TABLE{(operation.IfTableExists ? " IF EXISTS" : string.Empty)} " +
+            $"{Qualify(operation.SchemaName, operation.TableName)} " +
             $"ADD COLUMN {GenerateColumnDefinition(operation.Column)};");
     }
 
     private IReadOnlyList<MigrationCommand> GenerateAlterColumn(AlterColumnOperation operation)
     {
         var commands = new List<MigrationCommand>();
-        var table = Qualify(operation.SchemaName, operation.TableName);
+        var table = (operation.IfTableExists ? "IF EXISTS " : string.Empty) +
+            Qualify(operation.SchemaName, operation.TableName);
         var column = QuoteIdentifier(operation.Column.Name);
         if (operation.Column.Type != MigrationColumnType.Unspecified)
         {
@@ -266,10 +307,19 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
                 $"ALTER TABLE {table} ALTER COLUMN {column} {nullability};"));
         }
 
+        if (operation.Column.HasDefaultValue)
+        {
+            commands.Add(new MigrationCommand(
+                $"ALTER TABLE {table} ALTER COLUMN {column} SET DEFAULT " +
+                AdvancedMigrationSqlGenerator.GenerateDefaultValue(
+                    operation.Column.DefaultValue,
+                    AdvancedMigrationProvider.PostgreSql) + ";"));
+        }
+
         if (commands.Count == 0)
         {
             throw new MigrationValidationException(
-                $"AlterColumn('{operation.Column.Name}') must change its type or nullability.");
+                $"AlterColumn('{operation.Column.Name}') must change its type, nullability, or default value.");
         }
 
         return commands;
@@ -294,6 +344,14 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
             builder.Append(" GENERATED BY DEFAULT AS IDENTITY");
         }
 
+        builder.Append(AdvancedMigrationSqlGenerator.GenerateColumnOptions(
+            column,
+            string.Empty,
+            null,
+            AdvancedMigrationProvider.PostgreSql,
+            QuoteIdentifier,
+            Qualify));
+
         if (column.IsNullable == false)
         {
             builder.Append(" NOT NULL");
@@ -301,6 +359,8 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
 
         if (column.IsPrimaryKey)
         {
+            if (column.PrimaryKeyName != null)
+                builder.Append(" CONSTRAINT ").Append(QuoteIdentifier(column.PrimaryKeyName));
             builder.Append(" PRIMARY KEY");
         }
 
@@ -313,6 +373,8 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
         {
             case MigrationColumnType.Int16:
                 return "smallint";
+            case MigrationColumnType.Byte:
+                return "smallint";
             case MigrationColumnType.Int32:
                 return "integer";
             case MigrationColumnType.Int64:
@@ -324,14 +386,20 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
                     ? "numeric(" + column.Precision.Value.ToString(CultureInfo.InvariantCulture) + "," +
                       column.Scale!.Value.ToString(CultureInfo.InvariantCulture) + ")"
                     : "numeric";
+            case MigrationColumnType.Currency:
+                return "money";
             case MigrationColumnType.Single:
                 return "real";
             case MigrationColumnType.Double:
                 return "double precision";
             case MigrationColumnType.String:
+            case MigrationColumnType.AnsiString:
                 return column.Length.HasValue
                     ? "character varying(" + column.Length.Value.ToString(CultureInfo.InvariantCulture) + ")"
                     : "text";
+            case MigrationColumnType.FixedString:
+            case MigrationColumnType.FixedAnsiString:
+                return "character(" + column.Length!.Value.ToString(CultureInfo.InvariantCulture) + ")";
             case MigrationColumnType.Text:
                 return "text";
             case MigrationColumnType.Date:
@@ -339,13 +407,19 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
             case MigrationColumnType.DateTime:
                 return "timestamp without time zone";
             case MigrationColumnType.DateTimeOffset:
-                return "timestamp with time zone";
+                return column.DateTimePrecision.HasValue
+                    ? "timestamp(" + column.DateTimePrecision.Value.ToString(CultureInfo.InvariantCulture) + ") with time zone"
+                    : "timestamp with time zone";
             case MigrationColumnType.Time:
                 return "time without time zone";
             case MigrationColumnType.Guid:
                 return "uuid";
             case MigrationColumnType.Binary:
                 return "bytea";
+            case MigrationColumnType.Xml:
+                return "xml";
+            case MigrationColumnType.Custom:
+                return column.CustomType!;
             case MigrationColumnType.Json:
                 return "json";
             case MigrationColumnType.JsonBinary:
@@ -365,4 +439,35 @@ public sealed class PostgreSqlMigrationAdapter : IMigrationDatabaseAdapter, IMig
 
     private static IReadOnlyList<MigrationCommand> One(MigrationCommand command) =>
         new[] { command };
+
+    private IReadOnlyList<MigrationCommand> WithColumnIndexes(
+        MigrationCommand command,
+        IEnumerable<ColumnDefinition> columns,
+        string tableName,
+        string? schemaName,
+        string? tableDescription)
+    {
+        var commands = new List<MigrationCommand> { command };
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateColumnIndexCommands(
+            columns,
+            tableName,
+            schemaName,
+            AdvancedMigrationProvider.PostgreSql,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateReferencedByCommands(
+            columns,
+            AdvancedMigrationProvider.PostgreSql,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateDescriptionCommands(
+            tableName,
+            schemaName,
+            tableDescription,
+            columns,
+            AdvancedMigrationProvider.PostgreSql,
+            QuoteIdentifier,
+            Qualify));
+        return commands.AsReadOnly();
+    }
 }

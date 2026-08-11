@@ -21,14 +21,28 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
             throw new ArgumentNullException(nameof(operation));
         }
 
+        if (AdvancedMigrationSqlGenerator.TryGenerateConditional(
+            operation, AdvancedMigrationProvider.Sqlite, GenerateCommands, out var conditionalCommands))
+            return conditionalCommands;
+
         if (operation is CreateTableOperation createTable)
         {
-            return One(GenerateCreateTable(createTable));
+            return WithColumnIndexes(
+                GenerateCreateTable(createTable),
+                createTable.Columns,
+                createTable.TableName,
+                createTable.SchemaName,
+                createTable.Description);
         }
 
         if (operation is AddColumnOperation addColumn)
         {
-            return One(GenerateAddColumn(addColumn));
+            return WithColumnIndexes(
+                GenerateAddColumn(addColumn),
+                new[] { addColumn.Column },
+                addColumn.TableName,
+                addColumn.SchemaName,
+                null);
         }
 
         if (operation is AlterColumnOperation alterColumn)
@@ -39,7 +53,8 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
         if (operation is DeleteTableOperation deleteTable)
         {
             return One(new MigrationCommand(
-                $"DROP TABLE {Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
+                $"DROP TABLE{(deleteTable.IfExists ? " IF EXISTS" : string.Empty)} " +
+                $"{Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
         }
 
         if (operation is DeleteColumnOperation deleteColumn)
@@ -67,6 +82,16 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
         if (operation is ExecuteSqlOperation executeSql)
         {
             return One(new MigrationCommand(executeSql.Sql));
+        }
+
+        if (AdvancedMigrationSqlGenerator.TryGenerate(
+            operation,
+            AdvancedMigrationProvider.Sqlite,
+            QuoteIdentifier,
+            Qualify,
+            out var advancedCommands))
+        {
+            return advancedCommands;
         }
 
         throw new NotSupportedException(
@@ -151,6 +176,11 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
                 throw new MigrationValidationException("The schema preview command collection contains null.");
             }
 
+            if (!command.AnalyzeForSchema)
+            {
+                continue;
+            }
+
             builder.Apply(command.CommandText);
         }
 
@@ -210,7 +240,8 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
         }
 
         return new MigrationCommand(
-            $"CREATE TABLE {Qualify(operation.SchemaName, operation.TableName)} " +
+            $"CREATE TABLE{(operation.IfNotExists ? " IF NOT EXISTS" : string.Empty)} " +
+            $"{Qualify(operation.SchemaName, operation.TableName)} " +
             $"({string.Join(", ", columns)});");
     }
 
@@ -245,6 +276,12 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
             throw new NotSupportedException(
                 $"SQLite ALTER TABLE ADD COLUMN cannot add primary-key or identity column '{column.Name}'.");
         }
+
+        if (column.IsUnique)
+        {
+            throw new NotSupportedException(
+                $"SQLite ALTER TABLE ADD COLUMN cannot add unique column '{column.Name}'. Create an index after adding the column.");
+        }
     }
 
     private string GenerateColumnDefinition(ColumnDefinition column)
@@ -262,9 +299,21 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
                     $"SQLite identity column '{column.Name}' must be an Int64 primary key.");
             }
 
+            if (column.HasDefaultValue || column.ComputedExpression != null || column.ForeignKey != null)
+                throw new MigrationValidationException("A SQLite identity column cannot also be defaulted, computed, or a foreign key.");
+            if (column.PrimaryKeyName != null)
+                builder.Append(" CONSTRAINT ").Append(QuoteIdentifier(column.PrimaryKeyName));
             builder.Append(" PRIMARY KEY AUTOINCREMENT");
             return builder.ToString();
         }
+
+        builder.Append(AdvancedMigrationSqlGenerator.GenerateColumnOptions(
+            column,
+            string.Empty,
+            null,
+            AdvancedMigrationProvider.Sqlite,
+            QuoteIdentifier,
+            Qualify));
 
         if (column.IsNullable == false || column.IsPrimaryKey)
         {
@@ -273,6 +322,8 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
 
         if (column.IsPrimaryKey)
         {
+            if (column.PrimaryKeyName != null)
+                builder.Append(" CONSTRAINT ").Append(QuoteIdentifier(column.PrimaryKeyName));
             builder.Append(" PRIMARY KEY");
         }
 
@@ -284,16 +335,21 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
         switch (column.Type)
         {
             case MigrationColumnType.Int16:
+            case MigrationColumnType.Byte:
             case MigrationColumnType.Int32:
             case MigrationColumnType.Int64:
             case MigrationColumnType.Boolean:
                 return "INTEGER";
             case MigrationColumnType.Decimal:
+            case MigrationColumnType.Currency:
                 return "NUMERIC";
             case MigrationColumnType.Single:
             case MigrationColumnType.Double:
                 return "REAL";
             case MigrationColumnType.String:
+            case MigrationColumnType.AnsiString:
+            case MigrationColumnType.FixedString:
+            case MigrationColumnType.FixedAnsiString:
             case MigrationColumnType.Text:
             case MigrationColumnType.Date:
             case MigrationColumnType.DateTime:
@@ -301,10 +357,13 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
             case MigrationColumnType.Time:
             case MigrationColumnType.Guid:
             case MigrationColumnType.Json:
+            case MigrationColumnType.Xml:
                 return "TEXT";
             case MigrationColumnType.Binary:
             case MigrationColumnType.JsonBinary:
                 return "BLOB";
+            case MigrationColumnType.Custom:
+                return column.CustomType!;
             case MigrationColumnType.Unspecified:
             default:
                 throw new MigrationValidationException($"Column '{column.Name}' must declare a type.");
@@ -327,4 +386,35 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
     }
 
     private static IReadOnlyList<MigrationCommand> One(MigrationCommand command) => new[] { command };
+
+    private IReadOnlyList<MigrationCommand> WithColumnIndexes(
+        MigrationCommand command,
+        IEnumerable<ColumnDefinition> columns,
+        string tableName,
+        string? schemaName,
+        string? tableDescription)
+    {
+        var commands = new List<MigrationCommand> { command };
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateColumnIndexCommands(
+            columns,
+            tableName,
+            schemaName,
+            AdvancedMigrationProvider.Sqlite,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateReferencedByCommands(
+            columns,
+            AdvancedMigrationProvider.Sqlite,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateDescriptionCommands(
+            tableName,
+            schemaName,
+            tableDescription,
+            columns,
+            AdvancedMigrationProvider.Sqlite,
+            QuoteIdentifier,
+            Qualify));
+        return commands.AsReadOnly();
+    }
 }

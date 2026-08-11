@@ -36,7 +36,7 @@ public sealed class MigrationCommand
     /// <summary>Initializes a command without parameters.</summary>
     /// <param name="commandText">The SQL command text.</param>
     public MigrationCommand(string commandText)
-        : this(commandText, Array.Empty<MigrationCommandParameter>())
+        : this(commandText, Array.Empty<MigrationCommandParameter>(), true)
     {
     }
 
@@ -44,6 +44,18 @@ public sealed class MigrationCommand
     /// <param name="commandText">The SQL command text.</param>
     /// <param name="parameters">Parameters in provider binding order.</param>
     public MigrationCommand(string commandText, IEnumerable<MigrationCommandParameter> parameters)
+        : this(commandText, parameters, true)
+    {
+    }
+
+    /// <summary>Initializes a command and controls whether dry-run schema reconstruction analyzes it.</summary>
+    /// <param name="commandText">The SQL command text.</param>
+    /// <param name="parameters">Parameters in provider binding order.</param>
+    /// <param name="analyzeForSchema">Whether the command can change table columns.</param>
+    public MigrationCommand(
+        string commandText,
+        IEnumerable<MigrationCommandParameter> parameters,
+        bool analyzeForSchema)
     {
         if (string.IsNullOrWhiteSpace(commandText))
         {
@@ -63,6 +75,7 @@ public sealed class MigrationCommand
         }
 
         _parameters = parameterList.AsReadOnly();
+        AnalyzeForSchema = analyzeForSchema;
     }
 
     /// <summary>Gets the SQL command text.</summary>
@@ -70,6 +83,9 @@ public sealed class MigrationCommand
 
     /// <summary>Gets parameters in provider binding order.</summary>
     public IReadOnlyList<MigrationCommandParameter> Parameters => _parameters;
+
+    /// <summary>Gets whether dry-run schema reconstruction should analyze this command.</summary>
+    public bool AnalyzeForSchema { get; }
 }
 
 /// <summary>

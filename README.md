@@ -349,15 +349,22 @@ public sealed class CreateUsersMigration : Migration
 }
 ```
 
-The following operations can currently be analyzed at build time:
+The C# API includes these provider-neutral operations:
 
-- `Create.Table`, `InSchema`, `WithColumn`, `As...`, `Nullable`, `NotNullable`, `PrimaryKey`, and `Identity`
-- `Alter.Table`, `AddColumn`, and `AlterColumn`
-- `Delete.Table` and `Delete.Column(...).FromTable(...)`
-- `Rename.Table(...).To(...)` and `Rename.Column(...).OnTable(...).To(...)`
-- `Execute.Sql(constantSql)`
+- schemas, tables, standalone columns, table descriptions, and table moves
+- column types, collations, defaults, descriptions, indexes, unique values, computed values, and foreign keys
+- indexes, foreign keys, primary keys, unique constraints, and sequences
+- table, column, index, foreign-key, constraint, sequence, and default removal
+- table and column renames
+- `Insert`, `Update`, and row deletion with parameterized values
+- `Execute.Sql`, `Execute.Script`, `Execute.EmbeddedScript`, and `Execute.WithConnection`
+- `IfDatabase` by provider name or predicate, including its `Delegate` form
 
-Names, lengths, precision, scale, and the SQL passed to `Execute.Sql` must be compile-time constants. The analyzer cannot follow `if` statements, loops, or helper methods that change what `Up` does. Unsupported method chains and control flow produce compile errors.
+`SystemMethods` supplies database-generated defaults such as the current timestamp or a new GUID. `RawSql.Insert` inserts a provider-specific SQL expression where a literal value is not suitable. `SetExistingRowsTo` adds a nullable column, updates existing rows with a parameter, and then applies the requested non-null constraint.
+
+The source generator accepts the table, column, schema, index, foreign-key, constraint, sequence, and data method chains. Database names passed directly to `IfDatabase` are evaluated for the configured provider. Names, lengths, precision, scale, default literals, raw default SQL, and SQL passed to `Execute.Sql` must be compile-time constants. `Execute.Script`, `Execute.EmbeddedScript`, `Execute.WithConnection`, the predicate overload of `IfDatabase`, and `IfDatabase.Delegate` cannot be evaluated at build time. Use Flyway-compatible SQL as an `AdditionalFile` when a script must change the schema used for query generation.
+
+The analyzer cannot follow `if` statements, loops, or helper methods that change what `Up` does. Unsupported method chains and control flow produce compile errors. An adapter throws `NotSupportedException` when the selected database lacks the requested feature, such as standalone sequences in MySQL and SQLite or named schemas in SQLite.
 
 ### Flyway-compatible SQL
 

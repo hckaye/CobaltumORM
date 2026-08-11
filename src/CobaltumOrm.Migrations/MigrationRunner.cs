@@ -330,6 +330,19 @@ public sealed class MigrationRunner
                 foreach (var operation in operations)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (operation is ExecuteWithConnectionOperation withConnection)
+                    {
+                        withConnection.Callback(connection, transaction);
+                        continue;
+                    }
+                    if (operation is ConditionalMigrationOperation conditional &&
+                        conditional.Operation is ExecuteWithConnectionOperation conditionalConnection)
+                    {
+                        if (GenerateCommands(operation).Count != 0)
+                            conditionalConnection.Callback(connection, transaction);
+                        continue;
+                    }
+
                     var commands = GenerateCommands(operation);
                     foreach (var command in commands)
                     {
@@ -443,7 +456,8 @@ public sealed class MigrationRunner
     private IReadOnlyList<MigrationCommand> GenerateCommands(MigrationOperation operation)
     {
         var commands = _adapter.GenerateCommands(operation);
-        if (commands is null || commands.Count == 0)
+        if (commands is null ||
+            (commands.Count == 0 && !(operation is ConditionalMigrationOperation)))
         {
             throw new MigrationValidationException(
                 $"The adapter generated no commands for '{operation.GetType().Name}'.");

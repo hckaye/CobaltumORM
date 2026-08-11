@@ -20,25 +20,48 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
             throw new ArgumentNullException(nameof(operation));
         }
 
+        if (AdvancedMigrationSqlGenerator.TryGenerateConditional(
+            operation, AdvancedMigrationProvider.SqlServer, GenerateCommands, out var conditionalCommands))
+            return conditionalCommands;
+
         if (operation is CreateTableOperation createTable)
         {
-            return One(GenerateCreateTable(createTable));
+            return WithColumnIndexes(
+                GenerateCreateTable(createTable),
+                createTable.Columns,
+                createTable.TableName,
+                createTable.SchemaName,
+                createTable.Description);
         }
 
         if (operation is AddColumnOperation addColumn)
         {
-            return One(GenerateAddColumn(addColumn));
+            return WithColumnIndexes(
+                GenerateAddColumn(addColumn),
+                new[] { addColumn.Column },
+                addColumn.TableName,
+                addColumn.SchemaName,
+                null);
         }
 
         if (operation is AlterColumnOperation alterColumn)
         {
-            return One(GenerateAlterColumn(alterColumn));
+            var commands = new List<MigrationCommand>(GenerateAlterColumn(alterColumn));
+            commands.AddRange(AdvancedMigrationSqlGenerator.GenerateAlterColumnAuxiliaryCommands(
+                alterColumn.Column,
+                alterColumn.TableName,
+                alterColumn.SchemaName,
+                AdvancedMigrationProvider.SqlServer,
+                QuoteIdentifier,
+                Qualify));
+            return commands.AsReadOnly();
         }
 
         if (operation is DeleteTableOperation deleteTable)
         {
             return One(new MigrationCommand(
-                $"DROP TABLE {Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
+                $"DROP TABLE{(deleteTable.IfExists ? " IF EXISTS" : string.Empty)} " +
+                $"{Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
         }
 
         if (operation is DeleteColumnOperation deleteColumn)
@@ -70,6 +93,16 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
         if (operation is ExecuteSqlOperation executeSql)
         {
             return One(new MigrationCommand(executeSql.Sql));
+        }
+
+        if (AdvancedMigrationSqlGenerator.TryGenerate(
+            operation,
+            AdvancedMigrationProvider.SqlServer,
+            QuoteIdentifier,
+            Qualify,
+            out var advancedCommands))
+        {
+            return advancedCommands;
         }
 
         throw new NotSupportedException(
@@ -168,6 +201,11 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
                 throw new MigrationValidationException("The schema preview command collection contains null.");
             }
 
+            if (!command.AnalyzeForSchema)
+            {
+                continue;
+            }
+
             schema = SqlServerSchemaBuilder.ApplyScript(schema, command);
         }
 
@@ -197,6 +235,8 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
 
     private MigrationCommand GenerateCreateTable(CreateTableOperation operation)
     {
+        if (operation.IfNotExists)
+            throw new NotSupportedException("SQL Server does not provide CREATE TABLE IF NOT EXISTS syntax. Use Execute.Sql with provider-specific conditional SQL.");
         if (operation.Columns.Count == 0)
         {
             throw new MigrationValidationException(
@@ -241,8 +281,10 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
             $"ADD {GenerateColumnDefinition(operation.Column)};");
     }
 
-    private MigrationCommand GenerateAlterColumn(AlterColumnOperation operation)
+    private IReadOnlyList<MigrationCommand> GenerateAlterColumn(AlterColumnOperation operation)
     {
+        if (operation.Column.ComputedExpression != null)
+            throw new NotSupportedException("SQL Server cannot change a regular column into a computed column with ALTER COLUMN. Drop and recreate the column.");
         if (operation.Column.Type == MigrationColumnType.Unspecified)
         {
             throw new MigrationValidationException(
@@ -253,9 +295,22 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
         var nullability = operation.Column.IsNullable.HasValue
             ? (operation.Column.IsNullable.Value ? " NULL" : " NOT NULL")
             : string.Empty;
-        return new MigrationCommand(
-            $"ALTER TABLE {Qualify(operation.SchemaName, operation.TableName)} " +
-            $"ALTER COLUMN {QuoteIdentifier(operation.Column.Name)} {type}{nullability};");
+        var commands = new List<MigrationCommand>
+        {
+            new MigrationCommand(
+                $"ALTER TABLE {Qualify(operation.SchemaName, operation.TableName)} " +
+                $"ALTER COLUMN {QuoteIdentifier(operation.Column.Name)} {type}{nullability};"),
+        };
+        if (operation.Column.HasDefaultValue)
+        {
+            commands.Add(new MigrationCommand(
+                $"ALTER TABLE {Qualify(operation.SchemaName, operation.TableName)} ADD DEFAULT " +
+                AdvancedMigrationSqlGenerator.GenerateDefaultValue(
+                    operation.Column.DefaultValue,
+                    AdvancedMigrationProvider.SqlServer) +
+                $" FOR {QuoteIdentifier(operation.Column.Name)};"));
+        }
+        return commands.AsReadOnly();
     }
 
     private MigrationCommand CreateRenameCommand(
@@ -295,6 +350,9 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
 
     private string GenerateColumnDefinition(ColumnDefinition column)
     {
+        if (column.ComputedExpression != null)
+            return GenerateComputedColumnDefinition(column);
+
         var builder = new StringBuilder();
         builder.Append(QuoteIdentifier(column.Name));
         builder.Append(' ');
@@ -312,6 +370,14 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
             builder.Append(" IDENTITY(1,1)");
         }
 
+        builder.Append(AdvancedMigrationSqlGenerator.GenerateColumnOptions(
+            column,
+            string.Empty,
+            null,
+            AdvancedMigrationProvider.SqlServer,
+            QuoteIdentifier,
+            Qualify));
+
         if (column.IsNullable == false)
         {
             builder.Append(" NOT NULL");
@@ -323,9 +389,40 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
 
         if (column.IsPrimaryKey)
         {
+            if (column.PrimaryKeyName != null)
+                builder.Append(" CONSTRAINT ").Append(QuoteIdentifier(column.PrimaryKeyName));
             builder.Append(" PRIMARY KEY");
         }
 
+        return builder.ToString();
+    }
+
+    private string GenerateComputedColumnDefinition(ColumnDefinition column)
+    {
+        if (column.IsIdentity || column.HasDefaultValue || column.CollationName != null || column.ForeignKey != null)
+            throw new MigrationValidationException(
+                $"Computed column '{column.Name}' cannot also use identity, a default, a collation, or a foreign key.");
+        if (column.IsNullable == false && !column.IsComputedStored)
+            throw new MigrationValidationException(
+                $"Computed column '{column.Name}' must be persisted before it can be declared NOT NULL on SQL Server.");
+
+        var builder = new StringBuilder()
+            .Append(QuoteIdentifier(column.Name))
+            .Append(" AS (").Append(column.ComputedExpression).Append(')');
+        if (column.IsComputedStored) builder.Append(" PERSISTED");
+        if (column.IsNullable == false) builder.Append(" NOT NULL");
+        if (column.IsUnique)
+        {
+            if (column.UniqueIndexName != null)
+                builder.Append(" CONSTRAINT ").Append(QuoteIdentifier(column.UniqueIndexName));
+            builder.Append(" UNIQUE");
+        }
+        if (column.IsPrimaryKey)
+        {
+            if (column.PrimaryKeyName != null)
+                builder.Append(" CONSTRAINT ").Append(QuoteIdentifier(column.PrimaryKeyName));
+            builder.Append(" PRIMARY KEY");
+        }
         return builder.ToString();
     }
 
@@ -335,6 +432,8 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
         {
             case MigrationColumnType.Int16:
                 return "smallint";
+            case MigrationColumnType.Byte:
+                return "tinyint";
             case MigrationColumnType.Int32:
                 return "int";
             case MigrationColumnType.Int64:
@@ -356,6 +455,8 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
                 return "decimal(" +
                     column.Precision.Value.ToString(CultureInfo.InvariantCulture) + "," +
                     column.Scale!.Value.ToString(CultureInfo.InvariantCulture) + ")";
+            case MigrationColumnType.Currency:
+                return "money";
             case MigrationColumnType.Single:
                 return "real";
             case MigrationColumnType.Double:
@@ -373,6 +474,14 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
                 }
 
                 return "nvarchar(" + column.Length.Value.ToString(CultureInfo.InvariantCulture) + ")";
+            case MigrationColumnType.AnsiString:
+                return column.Length.HasValue
+                    ? "varchar(" + column.Length.Value.ToString(CultureInfo.InvariantCulture) + ")"
+                    : "varchar(max)";
+            case MigrationColumnType.FixedString:
+                return "nchar(" + column.Length!.Value.ToString(CultureInfo.InvariantCulture) + ")";
+            case MigrationColumnType.FixedAnsiString:
+                return "char(" + column.Length!.Value.ToString(CultureInfo.InvariantCulture) + ")";
             case MigrationColumnType.Text:
             case MigrationColumnType.Json:
             case MigrationColumnType.JsonBinary:
@@ -382,13 +491,21 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
             case MigrationColumnType.DateTime:
                 return "datetime2";
             case MigrationColumnType.DateTimeOffset:
-                return "datetimeoffset";
+                return column.DateTimePrecision.HasValue
+                    ? "datetimeoffset(" + column.DateTimePrecision.Value.ToString(CultureInfo.InvariantCulture) + ")"
+                    : "datetimeoffset";
             case MigrationColumnType.Time:
                 return "time";
             case MigrationColumnType.Guid:
                 return "uniqueidentifier";
             case MigrationColumnType.Binary:
-                return "varbinary(max)";
+                return column.Length.HasValue
+                    ? "varbinary(" + column.Length.Value.ToString(CultureInfo.InvariantCulture) + ")"
+                    : "varbinary(max)";
+            case MigrationColumnType.Xml:
+                return "xml";
+            case MigrationColumnType.Custom:
+                return column.CustomType!;
             case MigrationColumnType.Unspecified:
             default:
                 throw new MigrationValidationException($"Column '{column.Name}' must declare a type.");
@@ -417,4 +534,35 @@ public sealed class SqlServerMigrationAdapter : IMigrationDatabaseAdapter, IMigr
 
     private static IReadOnlyList<MigrationCommand> One(MigrationCommand command) =>
         new[] { command };
+
+    private IReadOnlyList<MigrationCommand> WithColumnIndexes(
+        MigrationCommand command,
+        IEnumerable<ColumnDefinition> columns,
+        string tableName,
+        string? schemaName,
+        string? tableDescription)
+    {
+        var commands = new List<MigrationCommand> { command };
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateColumnIndexCommands(
+            columns,
+            tableName,
+            schemaName,
+            AdvancedMigrationProvider.SqlServer,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateReferencedByCommands(
+            columns,
+            AdvancedMigrationProvider.SqlServer,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateDescriptionCommands(
+            tableName,
+            schemaName,
+            tableDescription,
+            columns,
+            AdvancedMigrationProvider.SqlServer,
+            QuoteIdentifier,
+            Qualify));
+        return commands.AsReadOnly();
+    }
 }

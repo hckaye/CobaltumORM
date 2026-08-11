@@ -349,15 +349,22 @@ public sealed class CreateUsersMigration : Migration
 }
 ```
 
-現在、ビルド時に解析できる操作は次のとおりです。
+C# API では、データベースに共通する次の操作を利用できます。
 
-- `Create.Table`、`InSchema`、`WithColumn`、`As...`、`Nullable`、`NotNullable`、`PrimaryKey`、`Identity`
-- `Alter.Table`、`AddColumn`、`AlterColumn`
-- `Delete.Table`、`Delete.Column(...).FromTable(...)`
-- `Rename.Table(...).To(...)`、`Rename.Column(...).OnTable(...).To(...)`
-- `Execute.Sql(constantSql)`
+- スキーマ、テーブル、単独の列、テーブル説明の作成と、テーブルの別スキーマへの移動
+- 列の型、照合順序、既定値、説明、インデックス、unique、生成式、外部キーの指定
+- インデックス、外部キー、主キー、unique 制約、シーケンスの作成
+- テーブル、列、インデックス、外部キー、制約、シーケンス、既定値の削除
+- テーブル名と列名の変更
+- パラメーターを使う `Insert`、`Update`、行の削除
+- `Execute.Sql`、`Execute.Script`、`Execute.EmbeddedScript`、`Execute.WithConnection`
+- provider 名または条件関数を指定する `IfDatabase` と、その `Delegate`
 
-名前、長さ、精度、小数部の桁数、`Execute.Sql` の SQL にはコンパイル時定数を指定してください。`Up` の実行内容を `if`、ループ、補助メソッドで変える構成は解析できません。解析できないメソッドチェーンや制御フローはコンパイルエラーになります。
+現在日時や新しい GUID など、データベースが生成する既定値には `SystemMethods` を使います。リテラル値では表せないデータベース固有の SQL 式には `RawSql.Insert` を使います。`SetExistingRowsTo` は、null を許可する列の追加、既存行の更新、指定された NOT NULL 制約の適用を順に行います。既存行へ入れる値はパラメーターとして渡されます。
+
+source generator は、テーブル、列、スキーマ、インデックス、外部キー、制約、シーケンス、データ操作のメソッドチェーンを受け付けます。`IfDatabase` に provider 名を直接指定した場合は、プロジェクトで選択した provider に合わせて解析します。名前、長さ、精度、小数部の桁数、既定値のリテラル、既定値へ使う生の SQL、`Execute.Sql` の SQL にはコンパイル時定数が必要です。`Execute.Script`、`Execute.EmbeddedScript`、`Execute.WithConnection`、条件関数を渡す `IfDatabase`、`IfDatabase.Delegate` はビルド時に評価できません。スクリプトによる変更を Query のコード生成へ反映する場合は、Flyway 互換 SQL を `AdditionalFile` として追加してください。
+
+`Up` の実行内容を `if`、ループ、補助メソッドで変える構成は解析できません。解析できないメソッドチェーンや制御フローはコンパイルエラーになります。選択したデータベースに機能がない場合は、アダプターが `NotSupportedException` を投げます。例えば、MySQL と SQLite では単独のシーケンスを作成できず、SQLite では名前付きスキーマを利用できません。
 
 ### Flyway 互換 SQL
 

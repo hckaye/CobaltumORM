@@ -21,25 +21,53 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
             throw new ArgumentNullException(nameof(operation));
         }
 
+        if (AdvancedMigrationSqlGenerator.TryGenerateConditional(
+            operation, AdvancedMigrationProvider.MySql, GenerateCommands, out var conditionalCommands))
+            return conditionalCommands;
+
         if (operation is CreateTableOperation createTable)
         {
-            return One(GenerateCreateTable(createTable));
+            return WithColumnIndexes(
+                GenerateCreateTable(createTable),
+                createTable.Columns,
+                createTable.TableName,
+                createTable.SchemaName,
+                createTable.Description);
         }
 
         if (operation is AddColumnOperation addColumn)
         {
-            return One(GenerateAddColumn(addColumn));
+            return WithColumnIndexes(
+                GenerateAddColumn(addColumn),
+                new[] { addColumn.Column },
+                addColumn.TableName,
+                addColumn.SchemaName,
+                null);
         }
 
         if (operation is AlterColumnOperation alterColumn)
         {
-            return One(GenerateAlterColumn(alterColumn));
+            var commands = new List<MigrationCommand> { GenerateAlterColumn(alterColumn) };
+            commands.AddRange(AdvancedMigrationSqlGenerator.GenerateColumnIndexCommands(
+                new[] { alterColumn.Column },
+                alterColumn.TableName,
+                alterColumn.SchemaName,
+                AdvancedMigrationProvider.MySql,
+                QuoteIdentifier,
+                Qualify));
+            commands.AddRange(AdvancedMigrationSqlGenerator.GenerateReferencedByCommands(
+                new[] { alterColumn.Column },
+                AdvancedMigrationProvider.MySql,
+                QuoteIdentifier,
+                Qualify));
+            return commands.AsReadOnly();
         }
 
         if (operation is DeleteTableOperation deleteTable)
         {
             return One(new MigrationCommand(
-                $"DROP TABLE {Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
+                $"DROP TABLE{(deleteTable.IfExists ? " IF EXISTS" : string.Empty)} " +
+                $"{Qualify(deleteTable.SchemaName, deleteTable.TableName)};"));
         }
 
         if (operation is DeleteColumnOperation deleteColumn)
@@ -67,6 +95,16 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
         if (operation is ExecuteSqlOperation executeSql)
         {
             return One(new MigrationCommand(executeSql.Sql));
+        }
+
+        if (AdvancedMigrationSqlGenerator.TryGenerate(
+            operation,
+            AdvancedMigrationProvider.MySql,
+            QuoteIdentifier,
+            Qualify,
+            out var advancedCommands))
+        {
+            return advancedCommands;
         }
 
         throw new NotSupportedException(
@@ -143,7 +181,15 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
     /// <inheritdoc/>
     public MigrationSchema BuildSchema(IReadOnlyList<MigrationCommand> commands)
     {
-        return MySqlSchemaBuilder.Build(commands);
+        if (commands is null) throw new ArgumentNullException(nameof(commands));
+        var schemaCommands = new List<MigrationCommand>();
+        foreach (var command in commands)
+        {
+            if (command is null)
+                throw new MigrationValidationException("The schema preview command collection contains null.");
+            if (command.AnalyzeForSchema) schemaCommands.Add(command);
+        }
+        return MySqlSchemaBuilder.Build(schemaCommands);
     }
 
     /// <summary>Quotes one MySQL identifier by doubling embedded backticks.</summary>
@@ -203,7 +249,8 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
         }
 
         return new MigrationCommand(
-            $"CREATE TABLE {Qualify(operation.SchemaName, operation.TableName)} " +
+            $"CREATE TABLE{(operation.IfNotExists ? " IF NOT EXISTS" : string.Empty)} " +
+            $"{Qualify(operation.SchemaName, operation.TableName)} " +
             $"({string.Join(", ", columns)});");
     }
 
@@ -262,6 +309,14 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
             builder.Append(" AUTO_INCREMENT");
         }
 
+        builder.Append(AdvancedMigrationSqlGenerator.GenerateColumnOptions(
+            column,
+            string.Empty,
+            null,
+            AdvancedMigrationProvider.MySql,
+            QuoteIdentifier,
+            Qualify));
+
         if (column.IsNullable == false)
         {
             builder.Append(" NOT NULL");
@@ -273,7 +328,16 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
 
         if (column.IsPrimaryKey)
         {
+            if (column.PrimaryKeyName != null)
+                builder.Append(" CONSTRAINT ").Append(QuoteIdentifier(column.PrimaryKeyName));
             builder.Append(" PRIMARY KEY");
+        }
+
+        if (column.Description != null)
+        {
+            builder.Append(" COMMENT '")
+                .Append(AdvancedMigrationSqlGenerator.CombinedDescription(column).Replace("'", "''"))
+                .Append('\'');
         }
 
         return builder.ToString();
@@ -285,6 +349,8 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
         {
             case MigrationColumnType.Int16:
                 return "smallint";
+            case MigrationColumnType.Byte:
+                return "tinyint unsigned";
             case MigrationColumnType.Int32:
                 return "int";
             case MigrationColumnType.Int64:
@@ -302,14 +368,20 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
                     ? "decimal(" + column.Precision.Value.ToString(CultureInfo.InvariantCulture) + "," +
                       column.Scale!.Value.ToString(CultureInfo.InvariantCulture) + ")"
                     : "decimal";
+            case MigrationColumnType.Currency:
+                return "decimal(19,4)";
             case MigrationColumnType.Single:
                 return "float";
             case MigrationColumnType.Double:
                 return "double";
             case MigrationColumnType.String:
+            case MigrationColumnType.AnsiString:
                 return column.Length.HasValue
                     ? "varchar(" + column.Length.Value.ToString(CultureInfo.InvariantCulture) + ")"
                     : "text";
+            case MigrationColumnType.FixedString:
+            case MigrationColumnType.FixedAnsiString:
+                return "char(" + column.Length!.Value.ToString(CultureInfo.InvariantCulture) + ")";
             case MigrationColumnType.Text:
                 return "text";
             case MigrationColumnType.Date:
@@ -317,13 +389,21 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
             case MigrationColumnType.DateTime:
                 return "datetime";
             case MigrationColumnType.DateTimeOffset:
-                return "datetime";
+                return column.DateTimePrecision.HasValue
+                    ? "datetime(" + column.DateTimePrecision.Value.ToString(CultureInfo.InvariantCulture) + ")"
+                    : "datetime";
             case MigrationColumnType.Time:
                 return "time";
             case MigrationColumnType.Guid:
                 return "char(36)";
             case MigrationColumnType.Binary:
-                return "longblob";
+                return column.Length.HasValue
+                    ? "varbinary(" + column.Length.Value.ToString(CultureInfo.InvariantCulture) + ")"
+                    : "longblob";
+            case MigrationColumnType.Xml:
+                return "longtext";
+            case MigrationColumnType.Custom:
+                return column.CustomType!;
             case MigrationColumnType.Json:
             case MigrationColumnType.JsonBinary:
                 return "json";
@@ -342,4 +422,35 @@ public sealed class MySqlMigrationAdapter : IMigrationDatabaseAdapter, IMigratio
 
     private static IReadOnlyList<MigrationCommand> One(MigrationCommand command) =>
         new[] { command };
+
+    private IReadOnlyList<MigrationCommand> WithColumnIndexes(
+        MigrationCommand command,
+        IEnumerable<ColumnDefinition> columns,
+        string tableName,
+        string? schemaName,
+        string? tableDescription)
+    {
+        var commands = new List<MigrationCommand> { command };
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateColumnIndexCommands(
+            columns,
+            tableName,
+            schemaName,
+            AdvancedMigrationProvider.MySql,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateReferencedByCommands(
+            columns,
+            AdvancedMigrationProvider.MySql,
+            QuoteIdentifier,
+            Qualify));
+        commands.AddRange(AdvancedMigrationSqlGenerator.GenerateDescriptionCommands(
+            tableName,
+            schemaName,
+            tableDescription,
+            columns,
+            AdvancedMigrationProvider.MySql,
+            QuoteIdentifier,
+            Qualify));
+        return commands.AsReadOnly();
+    }
 }

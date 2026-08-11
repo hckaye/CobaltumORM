@@ -94,7 +94,7 @@ internal static class ColumnDefinitionMutator
 }
 
 /// <summary>Starts table creation expressions.</summary>
-public sealed class CreateExpressionRoot
+public sealed partial class CreateExpressionRoot
 {
     private readonly Action<MigrationOperation> _add;
 
@@ -116,7 +116,7 @@ public sealed class CreateExpressionRoot
 /// Builds a table and its columns. <c>AsString()</c> maps to unbounded text;
 /// <c>AsString(length)</c> maps to a bounded variable-length string.
 /// </summary>
-public sealed class CreateTableExpression
+public sealed partial class CreateTableExpression
 {
     private readonly CreateTableOperation _operation;
     private ColumnDefinition? _currentColumn;
@@ -130,6 +130,17 @@ public sealed class CreateTableExpression
     public CreateTableExpression InSchema(string schemaName)
     {
         _operation.SchemaName = ExpressionValidation.Name(schemaName, nameof(schemaName));
+        foreach (var column in _operation.Columns)
+        {
+            if (column.ForeignKey != null)
+            {
+                column.ForeignKey.ForeignTableSchema = _operation.SchemaName;
+            }
+            foreach (var foreignKey in column.ReferencedByForeignKeys)
+            {
+                foreignKey.PrimaryTableSchema = _operation.SchemaName;
+            }
+        }
         return this;
     }
 
@@ -255,7 +266,7 @@ public sealed class CreateTableExpression
 }
 
 /// <summary>Starts table alteration expressions.</summary>
-public sealed class AlterExpressionRoot
+public sealed partial class AlterExpressionRoot
 {
     private readonly Action<MigrationOperation> _add;
 
@@ -270,7 +281,7 @@ public sealed class AlterExpressionRoot
 }
 
 /// <summary>Builds add-column and alter-column operations for one table.</summary>
-public sealed class AlterTableExpression
+public sealed partial class AlterTableExpression
 {
     private readonly string _tableName;
     private readonly Action<MigrationOperation> _add;
@@ -291,6 +302,24 @@ public sealed class AlterTableExpression
         foreach (var operation in _createdOperations)
         {
             SetSchema(operation, _schemaName);
+            if (operation is AddColumnOperation addColumn && addColumn.Column.ForeignKey != null)
+            {
+                addColumn.Column.ForeignKey.ForeignTableSchema = _schemaName;
+            }
+            else if (operation is AlterColumnOperation alterColumn && alterColumn.Column.ForeignKey != null)
+            {
+                alterColumn.Column.ForeignKey.ForeignTableSchema = _schemaName;
+            }
+            if (operation is AddColumnOperation addReferenced)
+            {
+                foreach (var foreignKey in addReferenced.Column.ReferencedByForeignKeys)
+                    foreignKey.PrimaryTableSchema = _schemaName;
+            }
+            else if (operation is AlterColumnOperation alterReferenced)
+            {
+                foreach (var foreignKey in alterReferenced.Column.ReferencedByForeignKeys)
+                    foreignKey.PrimaryTableSchema = _schemaName;
+            }
         }
 
         return this;
@@ -392,13 +421,27 @@ public sealed class AlterTableExpression
     {
         var column = Current();
         column.IsNullable = column.IsPrimaryKey ? false : true;
+        if (column.HasExistingRowsValue && column.ExistingRowsFinalColumn != null)
+            column.ExistingRowsFinalColumn.IsNullable = true;
         return this;
     }
 
     /// <summary>Disallows database null values.</summary>
     public AlterTableExpression NotNullable()
     {
-        Current().IsNullable = false;
+        var column = Current();
+        if (!column.IsAlteration && column.HasExistingRowsValue)
+        {
+            if (column.ExistingRowsValue is null || column.ExistingRowsValue == DBNull.Value)
+                throw new MigrationValidationException(
+                    $"SetExistingRowsTo for non-null column '{column.Name}' requires a non-null value.");
+            column.IsNullable = true;
+            EnsureExistingRowsFinalColumn(column).IsNullable = false;
+        }
+        else
+        {
+            column.IsNullable = false;
+        }
         return this;
     }
 
@@ -418,6 +461,14 @@ public sealed class AlterTableExpression
 
     private void Add(MigrationOperation operation, ColumnDefinition column)
     {
+        if (operation is AddColumnOperation addColumn)
+        {
+            addColumn.IfTableExists = _ifExists;
+        }
+        else if (operation is AlterColumnOperation alterColumn)
+        {
+            alterColumn.IfTableExists = _ifExists;
+        }
         _createdOperations.Add(operation);
         _currentColumn = column;
         _add(operation);
@@ -444,11 +495,19 @@ public sealed class AlterTableExpression
         {
             alterColumn.SchemaName = schemaName;
         }
+        else if (operation is UpdateDataOperation updateData)
+        {
+            updateData.SchemaName = schemaName;
+        }
+        else if (operation is AlterTableDescriptionOperation description)
+        {
+            description.SchemaName = schemaName;
+        }
     }
 }
 
 /// <summary>Starts table and column deletion expressions.</summary>
-public sealed class DeleteExpressionRoot
+public sealed partial class DeleteExpressionRoot
 {
     private readonly Action<MigrationOperation> _add;
 
@@ -486,6 +545,13 @@ public sealed class DeleteTableExpression
         _operation.SchemaName = ExpressionValidation.Name(schemaName, nameof(schemaName));
         return this;
     }
+
+    /// <summary>Skips deletion when the table does not exist.</summary>
+    public DeleteTableExpression IfExists()
+    {
+        _operation.IfExists = true;
+        return this;
+    }
 }
 
 /// <summary>Completes a column deletion by selecting its table.</summary>
@@ -509,6 +575,12 @@ public sealed class DeleteColumnFromExpression
         _add(operation);
         return new DeleteColumnExpression(operation);
     }
+
+    /// <summary>Adds another column to the same deletion expression.</summary>
+    public DeleteColumnsFromExpression Column(string columnName) =>
+        new DeleteColumnsFromExpression(
+            new[] { _columnName, ExpressionValidation.Name(columnName, nameof(columnName)) },
+            _add);
 }
 
 /// <summary>Qualifies a column deletion operation.</summary>
@@ -530,7 +602,7 @@ public sealed class DeleteColumnExpression
 }
 
 /// <summary>Starts table and column rename expressions.</summary>
-public sealed class RenameExpressionRoot
+public sealed partial class RenameExpressionRoot
 {
     private readonly Action<MigrationOperation> _add;
 
@@ -569,7 +641,7 @@ public sealed class RenameTableToExpression
     }
 
     /// <summary>Sets the new unqualified table name.</summary>
-    public void To(string newName)
+    public RenameTableResultExpression To(string newName)
     {
         var operation = new RenameTableOperation(
             _oldName,
@@ -578,7 +650,18 @@ public sealed class RenameTableToExpression
             SchemaName = _schemaName,
         };
         _add(operation);
+        return new RenameTableResultExpression(operation);
     }
+}
+
+/// <summary>Qualifies a completed table rename.</summary>
+public sealed class RenameTableResultExpression
+{
+    private readonly RenameTableOperation _operation;
+    internal RenameTableResultExpression(RenameTableOperation operation) => _operation = operation;
+    /// <summary>Qualifies the renamed table with a schema.</summary>
+    public void InSchema(string schemaName) =>
+        _operation.SchemaName = ExpressionValidation.Name(schemaName, nameof(schemaName));
 }
 
 /// <summary>Selects the table containing a column to rename.</summary>
@@ -638,13 +721,15 @@ public sealed class RenameColumnToExpression
 }
 
 /// <summary>Starts raw SQL operations.</summary>
-public sealed class ExecuteExpressionRoot
+public sealed partial class ExecuteExpressionRoot
 {
     private readonly Action<MigrationOperation> _add;
+    private readonly Func<Type> _migrationType;
 
-    internal ExecuteExpressionRoot(Action<MigrationOperation> add)
+    internal ExecuteExpressionRoot(Action<MigrationOperation> add, Func<Type> migrationType)
     {
         _add = add;
+        _migrationType = migrationType;
     }
 
     /// <summary>Adds SQL to the operation stream without changing its text.</summary>

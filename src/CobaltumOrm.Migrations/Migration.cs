@@ -43,6 +43,7 @@ public abstract class Migration
 {
     private readonly List<MigrationOperation> _operations = new List<MigrationOperation>();
     private bool _collecting;
+    private ConditionalFilter? _activeCondition;
 
     /// <summary>Initializes the FluentMigrator-style expression roots.</summary>
     protected Migration()
@@ -51,7 +52,9 @@ public abstract class Migration
         Alter = new AlterExpressionRoot(AddOperation);
         Delete = new DeleteExpressionRoot(AddOperation);
         Rename = new RenameExpressionRoot(AddOperation);
-        Execute = new ExecuteExpressionRoot(AddOperation);
+        Execute = new ExecuteExpressionRoot(AddOperation, GetType);
+        Insert = new InsertExpressionRoot(AddOperation);
+        Update = new UpdateExpressionRoot(AddOperation);
     }
 
     /// <summary>Gets the root for <c>Create.Table(...)</c> expressions.</summary>
@@ -68,6 +71,30 @@ public abstract class Migration
 
     /// <summary>Gets the root for <c>Execute.Sql(...)</c> expressions.</summary>
     protected ExecuteExpressionRoot Execute { get; }
+
+    /// <summary>Gets the root for inserting migration data.</summary>
+    protected InsertExpressionRoot Insert { get; }
+
+    /// <summary>Gets the root for updating migration data.</summary>
+    protected UpdateExpressionRoot Update { get; }
+
+    /// <summary>Creates migration roots that apply only to named database providers.</summary>
+    protected IfDatabaseExpressionRoot IfDatabase(params string[] databaseTypes)
+    {
+        if (databaseTypes is null) throw new ArgumentNullException(nameof(databaseTypes));
+        if (databaseTypes.Length == 0) throw new ArgumentException("At least one database type is required.", nameof(databaseTypes));
+        var names = new string[databaseTypes.Length];
+        for (var index = 0; index < databaseTypes.Length; index++)
+            names[index] = ExpressionValidation.Name(databaseTypes[index], nameof(databaseTypes));
+        return CreateConditionalRoot(new ConditionalFilter(names, null));
+    }
+
+    /// <summary>Creates migration roots selected by a database-provider predicate.</summary>
+    protected IfDatabaseExpressionRoot IfDatabase(Predicate<string> databaseTypePredicate)
+    {
+        if (databaseTypePredicate is null) throw new ArgumentNullException(nameof(databaseTypePredicate));
+        return CreateConditionalRoot(new ConditionalFilter(Array.Empty<string>(), databaseTypePredicate));
+    }
 
     /// <summary>Declares operations that apply the migration.</summary>
     public abstract void Up();
@@ -110,7 +137,45 @@ public abstract class Migration
             throw new InvalidOperationException("Migration expressions may only be used from Up or Down.");
         }
 
-        _operations.Add(operation);
+        _operations.Add(_activeCondition is null
+            ? operation
+            : new ConditionalMigrationOperation(operation, _activeCondition.DatabaseTypes, _activeCondition.Predicate));
+    }
+
+    private IfDatabaseExpressionRoot CreateConditionalRoot(ConditionalFilter filter) =>
+        new IfDatabaseExpressionRoot(
+            operation => AddConditionalOperation(operation, filter),
+            GetType,
+            delegation => ExecuteConditional(filter, delegation));
+
+    private void AddConditionalOperation(MigrationOperation operation, ConditionalFilter filter)
+    {
+        if (!_collecting)
+            throw new InvalidOperationException("Migration expressions may only be used from Up or Down.");
+        _operations.Add(new ConditionalMigrationOperation(
+            operation, filter.DatabaseTypes, filter.Predicate));
+    }
+
+    private void ExecuteConditional(ConditionalFilter filter, Action delegation)
+    {
+        if (!_collecting)
+            throw new InvalidOperationException("Migration expressions may only be used from Up or Down.");
+        if (_activeCondition != null)
+            throw new InvalidOperationException("Nested IfDatabase delegates are not supported.");
+        _activeCondition = filter;
+        try { delegation(); }
+        finally { _activeCondition = null; }
+    }
+
+    private sealed class ConditionalFilter
+    {
+        internal ConditionalFilter(string[] databaseTypes, Predicate<string>? predicate)
+        {
+            DatabaseTypes = databaseTypes;
+            Predicate = predicate;
+        }
+        internal string[] DatabaseTypes { get; }
+        internal Predicate<string>? Predicate { get; }
     }
 }
 

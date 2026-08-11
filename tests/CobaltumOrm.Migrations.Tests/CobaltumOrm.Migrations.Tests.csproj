@@ -14,6 +14,10 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/CobaltumOrm.Migrations/CobaltumOrm.Migrations.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.Migrations.MySql/CobaltumOrm.Migrations.MySql.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.Migrations.Oracle/CobaltumOrm.Migrations.Oracle.csproj" />
     <ProjectReference Include="../../src/CobaltumOrm.Migrations.PostgreSql/CobaltumOrm.Migrations.PostgreSql.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.Migrations.Sqlite/CobaltumOrm.Migrations.Sqlite.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.Migrations.SqlServer/CobaltumOrm.Migrations.SqlServer.csproj" />
   </ItemGroup>
 </Project>

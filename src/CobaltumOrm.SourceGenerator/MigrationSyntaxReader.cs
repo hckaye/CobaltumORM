@@ -59,6 +59,16 @@ internal static class MigrationSyntaxReader
         var steps = new List<MigrationStep>();
         foreach (var expression in expressions)
         {
+            if (!TryEvaluateDatabaseCondition(expression, semanticModel, dialect, report, out var applies))
+                return null;
+            if (!applies)
+            {
+                steps.Add(new MigrationStep(
+                    "-- Operation skipped by IfDatabase during compile-time analysis.",
+                    expression.GetLocation()));
+                continue;
+            }
+
             var invocation = expression as InvocationExpressionSyntax;
             if (invocation is null)
             {
@@ -80,6 +90,75 @@ internal static class MigrationSyntaxReader
 
         return steps;
     }
+
+    private static bool TryEvaluateDatabaseCondition(
+        ExpressionSyntax expression,
+        SemanticModel semanticModel,
+        CobaltumOrm.Analysis.IDatabaseDialect dialect,
+        Action<Diagnostic> report,
+        out bool applies)
+    {
+        applies = true;
+        var invocation = expression.DescendantNodesAndSelf()
+            .OfType<InvocationExpressionSyntax>()
+            .FirstOrDefault(candidate =>
+                semanticModel.GetSymbolInfo(candidate).Symbol is IMethodSymbol method &&
+                method.Name == "IfDatabase" &&
+                method.ContainingType.Name == "Migration" &&
+                method.ContainingNamespace.ToDisplayString() == "CobaltumOrm.Migrations");
+        if (invocation is null) return true;
+
+        var method = (IMethodSymbol)semanticModel.GetSymbolInfo(invocation).Symbol!;
+        if (method.Parameters.Length == 1 && method.Parameters[0].Type.TypeKind == TypeKind.Delegate)
+        {
+            report(Diagnostic.Create(
+                GeneratorDiagnostics.InvalidMigration,
+                invocation.GetLocation(),
+                "The predicate overload of IfDatabase cannot be evaluated during source generation; use constant database names."));
+            return false;
+        }
+
+        var requested = new List<string>();
+        foreach (var argument in invocation.ArgumentList.Arguments)
+        {
+            var constant = semanticModel.GetConstantValue(argument.Expression);
+            if (!constant.HasValue || !(constant.Value is string databaseType))
+            {
+                report(Diagnostic.Create(
+                    GeneratorDiagnostics.DynamicMigrationArgument,
+                    argument.GetLocation(),
+                    "IfDatabase names must be compile-time string constants during source generation."));
+                return false;
+            }
+            requested.Add(NormalizeDatabaseName(databaseType));
+        }
+
+        var providerNames = DatabaseProviderNames(dialect.Provider)
+            .Select(NormalizeDatabaseName)
+            .ToArray();
+        applies = requested.Any(name => providerNames.Contains(name, StringComparer.Ordinal));
+        return true;
+    }
+
+    private static IEnumerable<string> DatabaseProviderNames(CobaltumOrm.Analysis.DatabaseProvider provider)
+    {
+        switch (provider)
+        {
+            case CobaltumOrm.Analysis.DatabaseProvider.PostgreSql:
+                return new[] { "PostgreSQL", "Postgres", "PostgreSql", "Npgsql" };
+            case CobaltumOrm.Analysis.DatabaseProvider.MySql:
+                return new[] { "MySQL", "MySql" };
+            case CobaltumOrm.Analysis.DatabaseProvider.SqlServer:
+                return new[] { "SqlServer", "SQL Server", "MSSQL" };
+            case CobaltumOrm.Analysis.DatabaseProvider.Oracle:
+                return new[] { "Oracle" };
+            default:
+                return new[] { "SQLite", "Sqlite" };
+        }
+    }
+
+    private static string NormalizeDatabaseName(string value) =>
+        new string(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
 
     private static bool TryFlatten(
         InvocationExpressionSyntax invocation,
@@ -127,34 +206,99 @@ internal static class MigrationSyntaxReader
         switch (typeName)
         {
             case "CreateExpressionRoot":
-                return name == "Table";
+                return name == "Table" || name == "Schema" || name == "Column" ||
+                    name == "ForeignKey" || name == "Index" || name == "Sequence" ||
+                    name == "PrimaryKey" || name == "UniqueConstraint";
             case "AlterExpressionRoot":
-                return name == "Table";
-            case "DeleteExpressionRoot":
                 return name == "Table" || name == "Column";
+            case "DeleteExpressionRoot":
+                return name == "Table" || name == "Column" || name == "Schema" ||
+                    name == "ForeignKey" || name == "FromTable" || name == "Index" ||
+                    name == "Sequence" || name == "PrimaryKey" ||
+                    name == "UniqueConstraint" || name == "DefaultConstraint";
             case "RenameExpressionRoot":
                 return name == "Table" || name == "Column";
             case "CreateTableExpression":
                 return name == "InSchema" || name == "WithColumn" ||
                     name.StartsWith("As", StringComparison.Ordinal) ||
                     name == "Nullable" || name == "NotNullable" || name == "PrimaryKey" ||
-                    name == "Identity";
+                    name == "Identity" || name == "IfNotExists" || name == "WithDescription" ||
+                    name == "WithDefault" || name == "WithDefaultValue" ||
+                    name == "WithColumnDescription" || name == "WithColumnAdditionalDescription" ||
+                    name == "WithColumnAdditionalDescriptions" || name == "Indexed" || name == "Unique" ||
+                    name == "Computed" || name == "ForeignKey" || name == "OnDelete" ||
+                    name == "ReferencedBy" || name == "OnUpdate" || name == "OnDeleteOrUpdate";
             case "AlterTableExpression":
                 return name == "InSchema" || name == "AddColumn" || name == "AlterColumn" ||
                     name.StartsWith("As", StringComparison.Ordinal) ||
                     name == "Nullable" || name == "NotNullable" || name == "PrimaryKey" ||
-                    name == "Identity";
+                    name == "Identity" || name == "IfExists" || name == "ToSchema" ||
+                    name == "WithDescription" ||
+                    name == "WithDefault" || name == "WithDefaultValue" ||
+                    name == "SetExistingRowsTo" || name == "WithColumnDescription" ||
+                    name == "WithColumnAdditionalDescription" || name == "WithColumnAdditionalDescriptions" ||
+                    name == "Indexed" || name == "Unique" || name == "Computed" ||
+                    name == "ForeignKey" || name == "ReferencedBy" || name == "OnDelete" || name == "OnUpdate" ||
+                    name == "OnDeleteOrUpdate";
+            case "CreateColumnOnExpression":
+            case "AlterColumnOnExpression":
+                return name == "OnTable";
+            case "CreateIndexExpression":
+                return name == "OnTable" || name == "InSchema" || name == "OnColumn" ||
+                    name == "Ascending" || name == "Descending" || name == "Unique" ||
+                    name == "NonClustered" || name == "Clustered" || name == "WithOptions";
+            case "CreateForeignKeyExpression":
+                return name == "FromTable" || name == "InSchema" || name == "ForeignColumn" ||
+                    name == "ForeignColumns" || name == "ToTable" || name == "PrimaryColumn" ||
+                    name == "PrimaryColumns" || name == "OnDelete" || name == "OnUpdate" ||
+                    name == "OnDeleteOrUpdate";
+            case "CreateSequenceExpression":
+                return name == "InSchema" || name == "IncrementBy" || name == "MinValue" ||
+                    name == "MaxValue" || name == "StartWith" || name == "Cache" || name == "Cycle";
+            case "CreateConstraintExpression":
+                return name == "OnTable" || name == "WithSchema" || name == "Column" || name == "Columns";
             case "DeleteTableExpression":
             case "DeleteColumnExpression":
             case "RenameTableToExpression":
             case "RenameColumnToExpression":
-                return name == "InSchema" || name == "To";
+                return name == "InSchema" || name == "To" || name == "IfExists";
+            case "RenameTableResultExpression":
+                return name == "InSchema";
             case "DeleteColumnFromExpression":
-                return name == "FromTable";
+                return name == "FromTable" || name == "Column";
+            case "DeleteColumnsFromExpression":
+                return name == "FromTable" || name == "Column";
+            case "DeleteColumnsExpression":
+                return name == "InSchema";
+            case "DeleteForeignKeyExpression":
+                return name == "FromTable" || name == "OnTable" || name == "InSchema" ||
+                    name == "ForeignColumn" || name == "ForeignColumns" || name == "ToTable" ||
+                    name == "PrimaryColumn" || name == "PrimaryColumns";
+            case "DeleteIndexExpression":
+                return name == "OnTable" || name == "InSchema" || name == "OnColumn" ||
+                    name == "OnColumns" || name == "WithOptions";
+            case "DeleteSequenceExpression":
+                return name == "InSchema";
+            case "DeleteConstraintExpression":
+                return name == "FromTable" || name == "InSchema" || name == "Column" || name == "Columns";
+            case "DeleteDefaultConstraintExpression":
+                return name == "OnTable" || name == "InSchema" || name == "OnColumn";
+            case "DeleteDataExpression":
+                return name == "InSchema" || name == "Row" || name == "Where" ||
+                    name == "IsNull" || name == "AllRows";
+            case "InsertExpressionRoot":
+                return name == "IntoTable";
+            case "InsertDataExpression":
+                return name == "InSchema" || name == "Row" || name == "Rows";
+            case "UpdateExpressionRoot":
+                return name == "Table";
+            case "UpdateDataExpression":
+                return name == "InSchema" || name == "Set" || name == "Where" || name == "AllRows";
             case "RenameColumnOnExpression":
                 return name == "OnTable";
             case "ExecuteExpressionRoot":
-                return name == "Sql";
+                return name == "Sql" || name == "Script" || name == "EmbeddedScript" ||
+                    name == "WithConnection";
             default:
                 return false;
         }
@@ -225,6 +369,10 @@ internal static class MigrationSyntaxReader
             case "Delete": return TryDelete(calls, semanticModel, dialect, report, out sql);
             case "Rename": return TryRename(calls, semanticModel, dialect, report, out sql);
             case "Execute": return TryExecute(calls, semanticModel, report, out sql);
+            case "Insert":
+            case "Update":
+                sql = "-- Data migration does not change the compile-time table shape.";
+                return true;
             default:
                 report(Diagnostic.Create(
                     GeneratorDiagnostics.InvalidMigration,
@@ -242,9 +390,26 @@ internal static class MigrationSyntaxReader
         out string sql)
     {
         sql = string.Empty;
-        if (calls.Count == 0 || calls[0].Name != "Table")
+        if (calls.Count == 0)
         {
-            return Invalid(calls, report, "Create supports Create.Table(constantName) only.");
+            return Invalid(calls, report, "Create requires an operation.");
+        }
+
+        if (calls[0].Name == "Column" && calls.Count >= 2 && calls[1].Name == "OnTable")
+        {
+            var addCalls = new List<Call>
+            {
+                new Call("Table", calls[1].Syntax),
+                new Call("AddColumn", calls[0].Syntax),
+            };
+            addCalls.AddRange(calls.Skip(2));
+            return TryAlter(addCalls, semanticModel, dialect, report, out sql);
+        }
+
+        if (calls[0].Name != "Table")
+        {
+            sql = "-- Migration operation does not change the compile-time table shape.";
+            return true;
         }
 
         if (!TryString(calls[0], 0, semanticModel, report, out var tableName)) return false;
@@ -274,7 +439,7 @@ internal static class MigrationSyntaxReader
                     current!.Nullable = false;
                     break;
                 case "PrimaryKey":
-                    if (!RequireNoArguments(call, report) || !RequireColumn(current, call, report)) return false;
+                    if (!RequireAtMostOneStringArgument(call, semanticModel, report) || !RequireColumn(current, call, report)) return false;
                     current!.PrimaryKey = true;
                     current.PrimaryKeyLocation = call.Syntax.GetLocation();
                     current.Nullable = false;
@@ -283,6 +448,31 @@ internal static class MigrationSyntaxReader
                     if (!RequireNoArguments(call, report) || !RequireColumn(current, call, report)) return false;
                     current!.Identity = true;
                     current.IdentityLocation = call.Syntax.GetLocation();
+                    break;
+                case "IfNotExists":
+                    if (!RequireNoArguments(call, report)) return false;
+                    break;
+                case "WithDescription":
+                    if (!TryString(call, 0, semanticModel, report, out _)) return false;
+                    break;
+                case "WithDefault":
+                case "WithDefaultValue":
+                    if (!RequireColumn(current, call, report) ||
+                        !TryDefaultExpression(call, semanticModel, dialect, report, out var defaultExpression)) return false;
+                    current!.DefaultExpression = defaultExpression;
+                    break;
+                case "WithColumnDescription":
+                case "WithColumnAdditionalDescription":
+                case "WithColumnAdditionalDescriptions":
+                case "Indexed":
+                case "Unique":
+                case "Computed":
+                case "ForeignKey":
+                case "ReferencedBy":
+                case "OnDelete":
+                case "OnUpdate":
+                case "OnDeleteOrUpdate":
+                    if (!RequireColumn(current, call, report)) return false;
                     break;
                 default:
                     if (!TrySetType(current, call, semanticModel, dialect, report)) return false;
@@ -330,17 +520,32 @@ internal static class MigrationSyntaxReader
         out string sql)
     {
         sql = string.Empty;
-        if (calls.Count == 0 || calls[0].Name != "Table")
+        if (calls.Count == 0 || (calls[0].Name != "Table" && calls[0].Name != "Column"))
         {
-            return Invalid(calls, report, "Alter supports Alter.Table(constantName) only.");
+            return Invalid(calls, report, "Alter supports Alter.Table or Alter.Column.");
         }
 
-        if (!TryString(calls[0], 0, semanticModel, report, out var tableName)) return false;
-
-        string? schema = null;
+        var startIndex = 1;
+        string tableName;
         var alterations = new List<AlterBuilder>();
         AlterBuilder? current = null;
-        for (var index = 1; index < calls.Count; index++)
+        if (calls[0].Name == "Column")
+        {
+            if (calls.Count < 2 || calls[1].Name != "OnTable")
+                return Invalid(calls, report, "Alter.Column must call OnTable.");
+            if (!TryString(calls[0], 0, semanticModel, report, out var standaloneColumn) ||
+                !TryString(calls[1], 0, semanticModel, report, out tableName)) return false;
+            current = new AlterBuilder(standaloneColumn, false, calls[0].Syntax.GetLocation());
+            alterations.Add(current);
+            startIndex = 2;
+        }
+        else if (!TryString(calls[0], 0, semanticModel, report, out tableName))
+        {
+            return false;
+        }
+
+        string? schema = null;
+        for (var index = startIndex; index < calls.Count; index++)
         {
             var call = calls[index];
             switch (call.Name)
@@ -366,7 +571,7 @@ internal static class MigrationSyntaxReader
                     current!.Column.Nullable = false;
                     break;
                 case "PrimaryKey":
-                    if (!RequireNoArguments(call, report) || !RequireAlter(current, call, report)) return false;
+                    if (!RequireAtMostOneStringArgument(call, semanticModel, report) || !RequireAlter(current, call, report)) return false;
                     if (!current!.IsAdd) return Invalid(call, report, "PrimaryKey is supported only for AddColumn.");
                     current.Column.PrimaryKey = true;
                     current.Column.PrimaryKeyLocation = call.Syntax.GetLocation();
@@ -378,6 +583,35 @@ internal static class MigrationSyntaxReader
                     current.Column.Identity = true;
                     current.Column.IdentityLocation = call.Syntax.GetLocation();
                     break;
+                case "IfExists":
+                    if (!RequireNoArguments(call, report)) return false;
+                    break;
+                case "ToSchema":
+                    if (!TryString(call, 0, semanticModel, report, out _)) return false;
+                    break;
+                case "WithDescription":
+                    if (!TryString(call, 0, semanticModel, report, out _)) return false;
+                    break;
+                case "WithDefault":
+                case "WithDefaultValue":
+                    if (!RequireAlter(current, call, report) ||
+                        !TryDefaultExpression(call, semanticModel, dialect, report, out var defaultExpression)) return false;
+                    current!.Column.DefaultExpression = defaultExpression;
+                    break;
+                case "SetExistingRowsTo":
+                case "WithColumnDescription":
+                case "WithColumnAdditionalDescription":
+                case "WithColumnAdditionalDescriptions":
+                case "Indexed":
+                case "Unique":
+                case "Computed":
+                case "ForeignKey":
+                case "ReferencedBy":
+                case "OnDelete":
+                case "OnUpdate":
+                case "OnDeleteOrUpdate":
+                    if (!RequireAlter(current, call, report)) return false;
+                    break;
                 default:
                     if (!TrySetType(current?.Column, call, semanticModel, dialect, report)) return false;
                     break;
@@ -386,6 +620,11 @@ internal static class MigrationSyntaxReader
 
         if (alterations.Count == 0)
         {
+            if (calls.Any(call => call.Name == "ToSchema" || call.Name == "WithDescription"))
+            {
+                sql = "-- Moving a table does not change its compile-time column shape.";
+                return true;
+            }
             return Invalid(calls, report, "Alter.Table must call AddColumn or AlterColumn.");
         }
 
@@ -441,6 +680,21 @@ internal static class MigrationSyntaxReader
             }
 
             statements.Add(alterSql);
+            if (alteration.Column.DefaultExpression != null)
+            {
+                if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.Sqlite)
+                {
+                    return Invalid(
+                        alteration.Column.Location,
+                        report,
+                        $"SQLite cannot alter the default for column '{alteration.Column.Name}' without rebuilding the table.");
+                }
+                statements.Add(SetColumnDefaultSql(
+                    qualifiedTable,
+                    quotedColumn,
+                    alteration.Column.DefaultExpression,
+                    dialect));
+            }
         }
 
         sql = string.Join("\n", statements);
@@ -465,25 +719,32 @@ internal static class MigrationSyntaxReader
         if (calls[0].Name == "Table")
         {
             if (!TryString(calls[0], 0, semanticModel, report, out var tableName)) return false;
-            if (calls.Any(call => call.Name != "Table" && call.Name != "InSchema"))
-                return Invalid(calls, report, "Delete.Table supports only an optional InSchema call.");
+            if (calls.Any(call => call.Name != "Table" && call.Name != "InSchema" && call.Name != "IfExists"))
+                return Invalid(calls, report, "Delete.Table supports optional InSchema and IfExists calls.");
             sql = dialect.MigrationSqlWriter.DropTable(Qualify(schema, tableName, dialect));
             return true;
         }
 
-        if (calls[0].Name == "Column" && calls.Count >= 2 && calls[1].Name == "FromTable")
+        if (calls[0].Name == "Column" && calls.Any(call => call.Name == "FromTable"))
         {
-            if (!TryString(calls[0], 0, semanticModel, report, out var columnName) ||
-                !TryString(calls[1], 0, semanticModel, report, out var fromTable)) return false;
+            var fromCall = calls.First(call => call.Name == "FromTable");
+            if (!TryString(fromCall, 0, semanticModel, report, out var fromTable)) return false;
             if (calls.Any(call => call.Name != "Column" && call.Name != "FromTable" && call.Name != "InSchema"))
                 return Invalid(calls, report, "Delete.Column supports FromTable and an optional InSchema call.");
-            sql = dialect.MigrationSqlWriter.DropColumn(
-                Qualify(schema, fromTable, dialect),
-                dialect.IdentifierQuoter.QuoteIdentifier(columnName));
+            var statements = new List<string>();
+            foreach (var columnCall in calls.TakeWhile(call => call.Name != "FromTable"))
+            {
+                if (!TryString(columnCall, 0, semanticModel, report, out var columnName)) return false;
+                statements.Add(dialect.MigrationSqlWriter.DropColumn(
+                    Qualify(schema, fromTable, dialect),
+                    dialect.IdentifierQuoter.QuoteIdentifier(columnName)));
+            }
+            sql = string.Join("\n", statements);
             return true;
         }
 
-        return Invalid(calls, report, "Delete supports Delete.Table or Delete.Column(...).FromTable(...).");
+        sql = "-- Migration operation does not change the compile-time table shape.";
+        return true;
     }
 
     private static bool TryRename(
@@ -501,10 +762,11 @@ internal static class MigrationSyntaxReader
             if (!TrySchema(schemaCall, semanticModel, dialect, report, out schema)) return false;
         }
 
-        if (calls[0].Name == "Table" && calls.Last().Name == "To")
+        if (calls[0].Name == "Table" && calls.Any(call => call.Name == "To"))
         {
+            var toCall = calls.First(call => call.Name == "To");
             if (!TryString(calls[0], 0, semanticModel, report, out var oldTable) ||
-                !TryString(calls.Last(), 0, semanticModel, report, out var newTable)) return false;
+                !TryString(toCall, 0, semanticModel, report, out var newTable)) return false;
             if (calls.Any(call => call.Name != "Table" && call.Name != "To" && call.Name != "InSchema"))
                 return Invalid(calls, report, "Rename.Table supports InSchema and To only.");
             sql = dialect.MigrationSqlWriter.RenameTable(
@@ -539,7 +801,10 @@ internal static class MigrationSyntaxReader
         sql = string.Empty;
         if (calls.Count != 1 || calls[0].Name != "Sql")
         {
-            return Invalid(calls, report, "Execute supports Execute.Sql(constantSql) only.");
+            return Invalid(
+                calls,
+                report,
+                "Execute.Script, Execute.EmbeddedScript, and Execute.WithConnection cannot be evaluated at compile time. Use Execute.Sql with constant SQL when Up changes table columns.");
         }
 
         return TryString(calls[0], 0, semanticModel, report, out sql);
@@ -561,6 +826,7 @@ internal static class MigrationSyntaxReader
         switch (call.Name)
         {
             case "AsInt16": return TrySetMappedType(column, call, dialect, report, "int16") && RequireNoArguments(call, report);
+            case "AsByte": return TrySetMappedType(column, call, dialect, report, "int16") && RequireNoArguments(call, report);
             case "AsInt32": return TrySetMappedType(column, call, dialect, report, "int32") && RequireNoArguments(call, report);
             case "AsInt64": return TrySetMappedType(column, call, dialect, report, "int64") && RequireNoArguments(call, report);
             case "AsBoolean": return TrySetMappedType(column, call, dialect, report, "boolean") && RequireNoArguments(call, report);
@@ -569,22 +835,39 @@ internal static class MigrationSyntaxReader
             case "AsText": return TrySetMappedType(column, call, dialect, report, "text") && RequireNoArguments(call, report);
             case "AsDate": return TrySetMappedType(column, call, dialect, report, "date") && RequireNoArguments(call, report);
             case "AsDateTime": return TrySetMappedType(column, call, dialect, report, "datetime") && RequireNoArguments(call, report);
-            case "AsDateTimeOffset": return TrySetMappedType(column, call, dialect, report, "datetimeoffset") && RequireNoArguments(call, report);
+            case "AsDateTime2": return TrySetMappedType(column, call, dialect, report, "datetime") && RequireNoArguments(call, report);
+            case "AsDateTimeOffset":
+                if (call.Syntax.ArgumentList.Arguments.Count > 1) return Invalid(call, report, "AsDateTimeOffset accepts at most one precision argument.");
+                if (call.Syntax.ArgumentList.Arguments.Count == 1 && !TryInt(call, 0, semanticModel, report, out _)) return false;
+                return TrySetMappedType(column, call, dialect, report, "datetimeoffset");
             case "AsTime": return TrySetMappedType(column, call, dialect, report, "time") && RequireNoArguments(call, report);
             case "AsGuid": return TrySetMappedType(column, call, dialect, report, "guid") && RequireNoArguments(call, report);
-            case "AsBinary": return TrySetMappedType(column, call, dialect, report, "binary") && RequireNoArguments(call, report);
+            case "AsBinary":
+                if (call.Syntax.ArgumentList.Arguments.Count > 1) return Invalid(call, report, "AsBinary accepts at most one length argument.");
+                if (call.Syntax.ArgumentList.Arguments.Count == 1 && !TryPositiveInt(call, 0, semanticModel, report, out _)) return false;
+                return TrySetMappedType(column, call, dialect, report, "binary");
             case "AsJson": return TrySetMappedType(column, call, dialect, report, "json") && RequireNoArguments(call, report);
             case "AsJsonb": return TrySetMappedType(column, call, dialect, report, "jsonb") && RequireNoArguments(call, report);
+            case "AsCurrency":
+                return TrySetMappedType(column, call, dialect, report, "decimal", precision: 19, scale: 4) && RequireNoArguments(call, report);
+            case "AsAnsiString":
+                return TrySetStringLikeType(column, call, semanticModel, dialect, report, fixedLength: false);
+            case "AsFixedLengthString":
+            case "AsFixedLengthAnsiString":
+                return TrySetStringLikeType(column, call, semanticModel, dialect, report, fixedLength: true);
+            case "AsXml":
+                if (call.Syntax.ArgumentList.Arguments.Count > 1) return Invalid(call, report, "AsXml accepts at most one length argument.");
+                if (call.Syntax.ArgumentList.Arguments.Count == 1 && !TryPositiveInt(call, 0, semanticModel, report, out _)) return false;
+                return TrySetDirectType(column, call, dialect, report, XmlType(dialect));
+            case "AsCustom":
+                if (!TryString(call, 0, semanticModel, report, out var customType)) return false;
+                return TrySetDirectType(column, call, dialect, report, customType);
             case "AsString":
                 if (call.Syntax.ArgumentList.Arguments.Count == 0)
                 {
                     return TrySetMappedType(column, call, dialect, report, "string");
                 }
-
-                if (!TryInt(call, 0, semanticModel, report, out var length)) return false;
-                if (length <= 0)
-                    return Invalid(call, report, "AsString length must be a positive compile-time constant.");
-                return TrySetMappedType(column, call, dialect, report, "string", length: length);
+                return TrySetStringLikeType(column, call, semanticModel, dialect, report, fixedLength: false);
             case "AsDecimal":
                 if (call.Syntax.ArgumentList.Arguments.Count == 0)
                 {
@@ -605,6 +888,63 @@ internal static class MigrationSyntaxReader
                     scale: scale);
             default:
                 return Invalid(call, report, $"Migration DSL call '{call.Name}' is not supported by compile-time analysis.");
+        }
+    }
+
+    private static bool TrySetStringLikeType(
+        ColumnBuilder column,
+        Call call,
+        SemanticModel semanticModel,
+        CobaltumOrm.Analysis.IDatabaseDialect dialect,
+        Action<Diagnostic> report,
+        bool fixedLength)
+    {
+        var arguments = call.Syntax.ArgumentList.Arguments;
+        if (arguments.Count == 0)
+        {
+            if (fixedLength) return Invalid(call, report, $"{call.Name} requires a positive length.");
+            return TrySetMappedType(column, call, dialect, report, "string");
+        }
+        if (arguments.Count > 2) return Invalid(call, report, $"{call.Name} accepts length and optional collation only.");
+
+        var firstType = semanticModel.GetTypeInfo(arguments[0].Expression).ConvertedType;
+        if (firstType?.SpecialType == SpecialType.System_String)
+        {
+            if (fixedLength || arguments.Count != 1)
+                return Invalid(call, report, $"{call.Name} requires a length before its collation.");
+            return TryString(call, 0, semanticModel, report, out _) &&
+                TrySetMappedType(column, call, dialect, report, "string");
+        }
+
+        if (!TryPositiveInt(call, 0, semanticModel, report, out var length)) return false;
+        if (arguments.Count == 2 && !TryString(call, 1, semanticModel, report, out _)) return false;
+        return TrySetMappedType(column, call, dialect, report, "string", length: length);
+    }
+
+    private static bool TrySetDirectType(
+        ColumnBuilder column,
+        Call call,
+        CobaltumOrm.Analysis.IDatabaseDialect dialect,
+        Action<Diagnostic> report,
+        string sqlType)
+    {
+        if (!dialect.TypeMapper.TryMap(sqlType, out _))
+            return Invalid(call, report, $"Database provider '{dialect.Name}' does not recognize migration type '{sqlType}'.");
+        column.SqlType = sqlType;
+        column.LogicalType = "custom";
+        column.TypeLocation = call.Syntax.GetLocation();
+        return true;
+    }
+
+    private static string XmlType(CobaltumOrm.Analysis.IDatabaseDialect dialect)
+    {
+        switch (dialect.Provider)
+        {
+            case CobaltumOrm.Analysis.DatabaseProvider.PostgreSql: return "xml";
+            case CobaltumOrm.Analysis.DatabaseProvider.SqlServer: return "xml";
+            case CobaltumOrm.Analysis.DatabaseProvider.Oracle: return "XMLTYPE";
+            case CobaltumOrm.Analysis.DatabaseProvider.MySql: return "longtext";
+            default: return "TEXT";
         }
     }
 
@@ -705,6 +1045,10 @@ internal static class MigrationSyntaxReader
                 column.Nullable,
                 column.PrimaryKey,
                 column.Identity);
+            if (column.DefaultExpression != null)
+            {
+                sql += " DEFAULT " + column.DefaultExpression;
+            }
             return true;
         }
         catch (ArgumentException exception)
@@ -733,6 +1077,166 @@ internal static class MigrationSyntaxReader
             : exception.Message;
         return $"Database provider '{dialect.Name}' rejected {operation}: {detail}";
     }
+
+    private static bool TryDefaultExpression(
+        Call call,
+        SemanticModel semanticModel,
+        CobaltumOrm.Analysis.IDatabaseDialect dialect,
+        Action<Diagnostic> report,
+        out string expression)
+    {
+        expression = string.Empty;
+        if (call.Syntax.ArgumentList.Arguments.Count != 1)
+            return Invalid(call, report, $"'{call.Name}' requires one default value.");
+
+        var valueExpression = call.Syntax.ArgumentList.Arguments[0].Expression;
+        if (valueExpression is InvocationExpressionSyntax rawInvocation &&
+            semanticModel.GetSymbolInfo(rawInvocation).Symbol is IMethodSymbol rawMethod &&
+            rawMethod.Name == "Insert" && rawMethod.ContainingType.Name == "RawSql" &&
+            rawMethod.ContainingNamespace.ToDisplayString() == "CobaltumOrm.Migrations")
+        {
+            if (rawInvocation.ArgumentList.Arguments.Count != 1 ||
+                !TryConstantString(rawInvocation.ArgumentList.Arguments[0].Expression, semanticModel, out expression))
+            {
+                report(Diagnostic.Create(
+                    GeneratorDiagnostics.DynamicMigrationArgument,
+                    valueExpression.GetLocation(),
+                    "RawSql.Insert requires a compile-time string constant during source generation."));
+                return false;
+            }
+            return true;
+        }
+
+        if (semanticModel.GetSymbolInfo(valueExpression).Symbol is IFieldSymbol field &&
+            field.ContainingType.Name == "SystemMethods" &&
+            field.ContainingNamespace.ToDisplayString() == "CobaltumOrm.Migrations")
+        {
+            return TrySystemMethod(field.Name, call, dialect, report, out expression);
+        }
+
+        var constant = semanticModel.GetConstantValue(valueExpression);
+        if (!constant.HasValue)
+        {
+            report(Diagnostic.Create(
+                GeneratorDiagnostics.DynamicMigrationArgument,
+                valueExpression.GetLocation(),
+                $"Argument to '{call.Name}' must be a compile-time constant, SystemMethods value, or RawSql.Insert call."));
+            return false;
+        }
+
+        var value = constant.Value;
+        if (value is null)
+        {
+            expression = "NULL";
+            return true;
+        }
+        if (value is string text)
+        {
+            expression = SqlString(text, dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.SqlServer);
+            return true;
+        }
+        if (value is char character)
+        {
+            expression = SqlString(character.ToString(), dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.SqlServer);
+            return true;
+        }
+        if (value is bool boolean)
+        {
+            expression = dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.PostgreSql ||
+                dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.MySql
+                ? (boolean ? "TRUE" : "FALSE")
+                : (boolean ? "1" : "0");
+            return true;
+        }
+        if (value is IFormattable formattable)
+        {
+            expression = formattable.ToString(null, CultureInfo.InvariantCulture) ?? "NULL";
+            return true;
+        }
+
+        return Invalid(call, report, $"Default value type '{value.GetType().FullName}' is not supported during source generation.");
+    }
+
+    private static bool TrySystemMethod(
+        string method,
+        Call call,
+        CobaltumOrm.Analysis.IDatabaseDialect dialect,
+        Action<Diagnostic> report,
+        out string expression)
+    {
+        expression = string.Empty;
+        switch (method)
+        {
+            case "NewGuid":
+                switch (dialect.Provider)
+                {
+                    case CobaltumOrm.Analysis.DatabaseProvider.PostgreSql: expression = "gen_random_uuid()"; break;
+                    case CobaltumOrm.Analysis.DatabaseProvider.MySql: expression = "UUID()"; break;
+                    case CobaltumOrm.Analysis.DatabaseProvider.SqlServer: expression = "NEWID()"; break;
+                    case CobaltumOrm.Analysis.DatabaseProvider.Oracle: expression = "SYS_GUID()"; break;
+                    default: expression = "lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-' || substr('89ab',abs(random()) % 4 + 1,1) || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6)))"; break;
+                }
+                return true;
+            case "NewSequentialId":
+                if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.SqlServer) expression = "NEWSEQUENTIALID()";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.PostgreSql) expression = "uuid_generate_v1()";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.MySql) expression = "UUID()";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.Oracle) expression = "SYS_GUID()";
+                else return Invalid(call, report, "SQLite does not provide a sequential GUID function.");
+                return true;
+            case "CurrentDateTime":
+                if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.SqlServer) expression = "GETDATE()";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.Oracle) expression = "LOCALTIMESTAMP";
+                else expression = "CURRENT_TIMESTAMP";
+                return true;
+            case "CurrentDateTimeOffset":
+                if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.SqlServer) expression = "SYSDATETIMEOFFSET()";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.Oracle) expression = "SYSTIMESTAMP";
+                else expression = "CURRENT_TIMESTAMP";
+                return true;
+            case "CurrentUTCDateTime":
+                if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.PostgreSql) expression = "CURRENT_TIMESTAMP AT TIME ZONE 'UTC'";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.MySql) expression = "UTC_TIMESTAMP()";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.SqlServer) expression = "SYSUTCDATETIME()";
+                else if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.Oracle) expression = "SYS_EXTRACT_UTC(SYSTIMESTAMP)";
+                else expression = "CURRENT_TIMESTAMP";
+                return true;
+            case "CurrentUser":
+                if (dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.Sqlite)
+                    return Invalid(call, report, "SQLite does not expose a current database user.");
+                expression = dialect.Provider == CobaltumOrm.Analysis.DatabaseProvider.Oracle ? "USER" : "CURRENT_USER";
+                return true;
+            default:
+                return Invalid(call, report, $"SystemMethods.{method} is not supported.");
+        }
+    }
+
+    private static string SetColumnDefaultSql(
+        string qualifiedTable,
+        string quotedColumn,
+        string defaultExpression,
+        CobaltumOrm.Analysis.IDatabaseDialect dialect)
+    {
+        switch (dialect.Provider)
+        {
+            case CobaltumOrm.Analysis.DatabaseProvider.SqlServer:
+                return $"ALTER TABLE {qualifiedTable} ADD DEFAULT {defaultExpression} FOR {quotedColumn};";
+            case CobaltumOrm.Analysis.DatabaseProvider.Oracle:
+                return $"ALTER TABLE {qualifiedTable} MODIFY ({quotedColumn} DEFAULT {defaultExpression});";
+            default:
+                return $"ALTER TABLE {qualifiedTable} ALTER COLUMN {quotedColumn} SET DEFAULT {defaultExpression};";
+        }
+    }
+
+    private static bool TryConstantString(ExpressionSyntax expression, SemanticModel semanticModel, out string value)
+    {
+        var constant = semanticModel.GetConstantValue(expression);
+        value = constant.HasValue && constant.Value is string text ? text : string.Empty;
+        return constant.HasValue && constant.Value is string;
+    }
+
+    private static string SqlString(string value, bool unicode) =>
+        (unicode ? "N" : string.Empty) + "'" + value.Replace("'", "''") + "'";
 
     private static Location ColumnOptionLocation(ColumnBuilder column)
     {
@@ -853,10 +1357,32 @@ internal static class MigrationSyntaxReader
         }
     }
 
+    private static bool TryPositiveInt(
+        Call call,
+        int index,
+        SemanticModel semanticModel,
+        Action<Diagnostic> report,
+        out int value)
+    {
+        if (!TryInt(call, index, semanticModel, report, out value)) return false;
+        return value > 0 || Invalid(call, report, $"Argument {index + 1} to '{call.Name}' must be positive.");
+    }
+
     private static bool RequireNoArguments(Call call, Action<Diagnostic> report)
     {
         return call.Syntax.ArgumentList.Arguments.Count == 0 ||
             Invalid(call, report, $"'{call.Name}' does not accept arguments in the supported migration DSL.");
+    }
+
+    private static bool RequireAtMostOneStringArgument(
+        Call call,
+        SemanticModel semanticModel,
+        Action<Diagnostic> report)
+    {
+        var count = call.Syntax.ArgumentList.Arguments.Count;
+        if (count == 0) return true;
+        if (count > 1) return Invalid(call, report, $"'{call.Name}' accepts at most one name argument.");
+        return TryString(call, 0, semanticModel, report, out _);
     }
 
     private static bool RequireColumn(ColumnBuilder? column, Call call, Action<Diagnostic> report)
@@ -918,6 +1444,7 @@ internal static class MigrationSyntaxReader
         internal Location? PrimaryKeyLocation { get; set; }
         internal bool Identity { get; set; }
         internal Location? IdentityLocation { get; set; }
+        internal string? DefaultExpression { get; set; }
     }
 
     private sealed class AlterBuilder
