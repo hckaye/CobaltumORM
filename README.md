@@ -57,8 +57,6 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 
 The [benchmark project](benchmarks/CobaltumOrm.Benchmarks/README.md) runs PostgreSQL comparisons for CobaltumORM, Dapper, EF Core, LINQ to DB, RepoDB, and ADO.NET. It starts a Docker container and creates the test data automatically.
 
-The [build-time benchmark](benchmarks/CobaltumOrm.BuildBenchmarks/README.md) measures projects containing many queries and migration statements.
-
 ## Database providers
 
 PostgreSQL is the main target. Migration project creation supports these five provider values:
@@ -568,7 +566,7 @@ var rows = await UserQueries.ReadAllAsync(database.Connection);
 
 The incremental source generator runs inside every build and is the default. It needs no extra configuration and suits most projects.
 
-`cobaltum generate` is a second way to get the same files. It writes them to disk before the build, in the way `protoc` and `Grpc.Tools` write generated C# ahead of compilation. Consider it when one of these applies:
+`cobaltum generate` writes the same C# files as the incremental source generator by running the CLI before the build. The generated files are compiled as normal source files, so generation only needs to run when the inputs change. Consider it when one of these applies:
 
 - The schema changes rarely and the generated code can be checked in and reviewed.
 - The project is large enough that analyzing every build costs more than analyzing when the schema changes.
@@ -631,11 +629,9 @@ For a library project that you keep in source control and build anywhere, use `-
 <Import Project="CobaltumOrm.Generated.props" />
 ```
 
-### Separating the query project
+### Project layout when builds become slow
 
-Explicit generation works best when the code that talks to the database lives in its own project. Put the `[Query]` containers, the `Query` call sites, and the migration reference in a query project, and let the application project reference it:
-
-Build-time optimization is ongoing. In the [2026-08-13 benchmark](benchmarks/CobaltumOrm.BuildBenchmarks/README.md#results-from-2026-08-13), a project with 1,000 `[Query]` declarations and 1,000 `Query(...)` methods took 1.1 seconds for a no-change build. A clean build took 11.9 seconds, and a build after changing one C# file without a query took 8.5 seconds. Projects with many queries should use a separate query project so unrelated application changes do not repeat the analysis.
+The incremental source generator remains suitable for normal projects. If builds become slow, especially in a large application or a project with many queries, put the `[Query]` containers, `Query` call sites, and migration reference in a dedicated query project. The application project references that query project.
 
 ```
 src/
@@ -661,8 +657,6 @@ src/
     <CobaltumOrmMigrationProjectReference Include="../MyApp.Database/MyApp.Database.csproj" />
     <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
   </ItemGroup>
-
-  <Import Project="Generated/CobaltumOrm.Generated.props" />
 </Project>
 ```
 
@@ -673,7 +667,22 @@ src/
 </ItemGroup>
 ```
 
-With this layout, editing application or UI code does not rebuild the query project, so SQL analysis does not run again. Run `cobaltum generate` when a migration or a query changes, and check the output directory in with the rest of the source if you use `--output-mode directory`.
+With this layout alone, the incremental source generator still performs code generation. Editing application or UI code does not repeat SQL analysis when it does not rebuild the query project.
+
+Use `cobaltum generate` when the separated query project is still slow, the schema changes infrequently, or the build environment cannot use source generators.
+
+```console
+cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj \
+  --output-mode directory --output src/MyApp.Queries/Generated
+```
+
+Import the generated props file from the query project:
+
+```xml
+<Import Project="Generated/CobaltumOrm.Generated.props" />
+```
+
+The props file disables build-time Query analysis and source transformation, removes the incremental source generator from the compilation, and adds the files written by the CLI to `Compile`. Run the command again after changing a migration or query. Output from `--output-mode directory` can be checked in with the other source files when needed.
 
 ### Analysis cache
 
@@ -689,7 +698,7 @@ Set the following property when troubleshooting to disable reads and writes:
 </PropertyGroup>
 ```
 
-A cache hit avoids applying the migrations again or running the SQL query parser and binder again. Roslyn compilation and symbol collection still run, as does mapping query results to C# types. C# edits can still invalidate the build even when the SQL and schema have not changed. For large applications with many queries, keep the query-library layout shown above so unrelated application changes do not rebuild the query project.
+A cache hit avoids applying the migrations again or running the SQL query parser and binder again. Roslyn compilation and symbol collection still run, as does mapping query results to C# types. C# edits can still invalidate the build even when the SQL and schema have not changed. If builds become slow, use the separated query project or explicit CLI generation described above.
 
 ## Generated table types
 

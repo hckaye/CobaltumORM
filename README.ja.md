@@ -57,8 +57,6 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 
 PostgreSQL を使った CobaltumORM、Dapper、EF Core、LINQ to DB、RepoDB、ADO.NET の実測比較は、[ベンチマークプロジェクト](benchmarks/CobaltumOrm.Benchmarks/README.ja.md)から実行できます。Docker コンテナの起動とテストデータの作成は自動です。
 
-大量のクエリとマイグレーションを含む場合のビルド時間は、[ビルド時間ベンチマーク](benchmarks/CobaltumOrm.BuildBenchmarks/README.ja.md)で測定できます。
-
 ## データベースプロバイダー
 
 主な対象は PostgreSQL です。マイグレーションプロジェクトの作成では、次の 5 つのプロバイダー名を使えます。
@@ -568,7 +566,7 @@ var rows = await UserQueries.ReadAllAsync(database.Connection);
 
 コード生成は、ビルドのたびに動くインクリメンタルソースジェネレーターが既定です。追加の設定は不要で、ほとんどのプロジェクトではこちらを使ってください。
 
-`cobaltum generate` は、同じファイルを得るためのもう一つの方法です。`protoc` や `Grpc.Tools` がコンパイル前に C# を生成するのと同じように、ビルドより前にファイルを書き出します。次のいずれかに当てはまる場合に検討してください。
+`cobaltum generate` は、インクリメンタルソースジェネレーターと同じ C# ファイルを、ビルド前に CLI で書き出す方法です。生成したファイルを通常のソースコードとしてコンパイルするため、必要なときだけ生成処理を実行できます。次のいずれかに当てはまる場合に検討してください。
 
 - スキーマの変更頻度が低く、生成コードをリポジトリに入れてレビューしたい。
 - プロジェクトが大きく、毎回のビルドで解析するコストが、スキーマ変更時だけ解析するコストを上回る。
@@ -631,11 +629,9 @@ cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj \
 <Import Project="CobaltumOrm.Generated.props" />
 ```
 
-### Query プロジェクトを分ける構成
+### ビルドが重い場合のプロジェクト構成
 
-明示的な生成は、データベースを扱うコードを専用のプロジェクトに分けたときに最も効果があります。`[Query]` を付けたクラス、`Query` の呼び出し、マイグレーションの参照を Query プロジェクトにまとめ、アプリケーションプロジェクトからそれを参照します。
-
-ビルド時間の最適化は継続しています。[2026-08-13 のベンチマーク](benchmarks/CobaltumOrm.BuildBenchmarks/README.ja.md#2026-08-13-の測定結果)では、`[Query]` と `Query(...)` を 1,000 件ずつ持つプロジェクトの変更なしビルドは 1.1 秒でした。一方、clean build は 11.9 秒、クエリを含まない C# ファイルを 1 個変更したビルドは 8.5 秒です。クエリを多く持つ場合は、関係のないアプリケーションコードの変更で解析をやり直さないように Query プロジェクトを分けてください。
+通常はインクリメンタルソースジェネレーターを使う構成のままで問題ありません。ビルドが重く感じられる場合、特にアプリケーションが大きい場合やクエリが多い場合は、`[Query]` を付けたクラス、`Query` の呼び出し、マイグレーションの参照を専用の Query プロジェクトにまとめます。アプリケーションプロジェクトからは、その Query プロジェクトを参照します。
 
 ```
 src/
@@ -661,8 +657,6 @@ src/
     <CobaltumOrmMigrationProjectReference Include="../MyApp.Database/MyApp.Database.csproj" />
     <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
   </ItemGroup>
-
-  <Import Project="Generated/CobaltumOrm.Generated.props" />
 </Project>
 ```
 
@@ -673,7 +667,22 @@ src/
 </ItemGroup>
 ```
 
-この構成では、アプリケーションや UI のコードを編集しても Query プロジェクトはリビルドされないため、SQL の解析も再実行されません。マイグレーションかクエリを変更したときに `cobaltum generate` を実行してください。`--output-mode directory` を使う場合は、出力ディレクトリを他のソースと一緒にコミットします。
+この構成だけを使う場合、コード生成は引き続きインクリメンタルソースジェネレーターが担当します。アプリケーションや UI のコードを編集しても Query プロジェクトがリビルドされなければ、SQL の解析も再実行されません。
+
+Query プロジェクトを分けてもビルドが重い場合、スキーマを変更する頻度が低い場合、またはビルド環境でソースジェネレーターを使えない場合は、`cobaltum generate` で明示的に生成できます。
+
+```console
+cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj \
+  --output-mode directory --output src/MyApp.Queries/Generated
+```
+
+Query プロジェクトから生成された props ファイルを読み込みます。
+
+```xml
+<Import Project="Generated/CobaltumOrm.Generated.props" />
+```
+
+この props ファイルは、ビルド時の Query 解析とソース変換を無効にし、インクリメンタルソースジェネレーターをコンパイル対象から外して、CLI が生成したファイルを `Compile` に追加します。マイグレーションまたはクエリを変更したときにコマンドを再実行してください。`--output-mode directory` の出力は、必要に応じて他のソースと一緒にコミットできます。
 
 ### 解析キャッシュ
 
@@ -689,7 +698,7 @@ src/
 </PropertyGroup>
 ```
 
-キャッシュが使われると、マイグレーションの再適用と SQL クエリのパーサーおよびバインダーの再実行を省略します。Roslyn のコンパイルとシンボル収集、クエリ結果から C# 型へのマッピングは毎回実行します。SQL とスキーマが変わっていなくても、C# の編集によってビルドが再実行されることがあります。クエリが多い大規模なアプリケーションでは、関係のないアプリケーションコードの変更で Query プロジェクトを再ビルドしないように、上記の Query ライブラリ構成を使ってください。
+キャッシュが使われると、マイグレーションの再適用と SQL クエリのパーサーおよびバインダーの再実行を省略します。Roslyn のコンパイルとシンボル収集、クエリ結果から C# 型へのマッピングは毎回実行します。SQL とスキーマが変わっていなくても、C# の編集によってビルドが再実行されることがあります。ビルドが重く感じられる場合は、上記の Query プロジェクト分離または CLI による明示的な生成を利用できます。
 
 ## 生成されるテーブル型
 
