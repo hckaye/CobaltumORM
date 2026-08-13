@@ -83,6 +83,11 @@ internal static class CobaltumOrmTransformManifest
             return false;
         }
 
+        if (!TryGetExpectedOutputDirectory(path, out var outputDirectory))
+        {
+            return RejectManifest(path, out manifest);
+        }
+
         try
         {
             var document = XDocument.Load(path, LoadOptions.PreserveWhitespace);
@@ -91,7 +96,7 @@ internal static class CobaltumOrmTransformManifest
                 root.Name != "CobaltumOrmTransformSuccess" ||
                 (string?)root.Attribute("version") != ManifestVersion)
             {
-                return false;
+                return RejectManifest(path, out manifest);
             }
 
             var processedSourceElements = root.Element("ProcessedSources");
@@ -101,26 +106,43 @@ internal static class CobaltumOrmTransformManifest
                 transformedSourceElements == null ||
                 outputElements == null)
             {
-                return false;
+                return RejectManifest(path, out manifest);
             }
 
-            var processedSources = processedSourceElements.Elements("Source")
-                .Select(element => (string?)element.Attribute("itemSpec"))
-                .Where(itemSpec => !string.IsNullOrEmpty(itemSpec))
-                .Select(itemSpec => new TaskItem(itemSpec!))
-                .Cast<ITaskItem>()
-                .ToArray();
-            var transformedSources = transformedSourceElements.Elements("Source")
-                .Select(CreateTaskItem)
-                .Where(item => item != null)
-                .Cast<ITaskItem>()
-                .ToArray();
-            var outputs = outputElements.Elements("Output")
-                .Select(element => (string?)element.Attribute("path"))
-                .Where(outputPath => !string.IsNullOrEmpty(outputPath))
-                .Select(outputPath => new TaskItem(outputPath!))
-                .Cast<ITaskItem>()
-                .ToArray();
+            var processedSources = new List<ITaskItem>();
+            foreach (var element in processedSourceElements.Elements("Source"))
+            {
+                var itemSpec = (string?)element.Attribute("itemSpec");
+                if (string.IsNullOrWhiteSpace(itemSpec))
+                {
+                    return RejectManifest(path, out manifest);
+                }
+
+                processedSources.Add(new TaskItem(itemSpec));
+            }
+
+            var transformedSources = new List<ITaskItem>();
+            foreach (var element in transformedSourceElements.Elements("Source"))
+            {
+                if (!TryCreateTransformedTaskItem(element, outputDirectory, out var item))
+                {
+                    return RejectManifest(path, out manifest);
+                }
+
+                transformedSources.Add(item!);
+            }
+
+            var outputs = new List<ITaskItem>();
+            foreach (var element in outputElements.Elements("Output"))
+            {
+                var outputPath = (string?)element.Attribute("path");
+                if (!TryNormalizeDirectChildPath(outputPath, outputDirectory, out var normalizedPath))
+                {
+                    return RejectManifest(path, out manifest);
+                }
+
+                outputs.Add(new TaskItem(normalizedPath));
+            }
 
             var outputPaths = new HashSet<string>(
                 outputs
@@ -133,15 +155,18 @@ internal static class CobaltumOrmTransformManifest
                 .Where(transformedPath => transformedPath != null)
                 .Any(transformedPath => !outputPaths.Contains(transformedPath!)))
             {
-                return false;
+                return RejectManifest(path, out manifest);
             }
 
-            manifest = new TransformManifestData(processedSources, transformedSources, outputs);
+            manifest = new TransformManifestData(
+                processedSources.ToArray(),
+                transformedSources.ToArray(),
+                outputs.ToArray());
             return true;
         }
         catch (Exception)
         {
-            return false;
+            return RejectManifest(path, out manifest);
         }
     }
 
@@ -213,20 +238,25 @@ internal static class CobaltumOrmTransformManifest
         }
     }
 
-    private static ITaskItem? CreateTaskItem(XElement element)
+    private static bool TryCreateTransformedTaskItem(
+        XElement element,
+        string outputDirectory,
+        out ITaskItem? item)
     {
         var itemSpec = (string?)element.Attribute("itemSpec");
-        if (string.IsNullOrEmpty(itemSpec))
+        if (!TryNormalizeDirectChildPath(itemSpec, outputDirectory, out var normalizedPath))
         {
-            return null;
+            item = null;
+            return false;
         }
 
-        var item = new TaskItem(itemSpec);
-        SetMetadata(item, element, "CobaltumOrmTransformed");
-        SetMetadata(item, element, "AutoGen");
-        SetMetadata(item, element, "DesignTime");
-        SetMetadata(item, element, "Visible");
-        return item;
+        var taskItem = new TaskItem(normalizedPath);
+        SetMetadata(taskItem, element, "CobaltumOrmTransformed");
+        SetMetadata(taskItem, element, "AutoGen");
+        SetMetadata(taskItem, element, "DesignTime");
+        SetMetadata(taskItem, element, "Visible");
+        item = taskItem;
+        return true;
     }
 
     private static void SetMetadata(TaskItem item, XElement element, string name)
@@ -236,6 +266,79 @@ internal static class CobaltumOrmTransformManifest
         {
             item.SetMetadata(name, value);
         }
+    }
+
+    private static bool TryGetExpectedOutputDirectory(
+        string successManifestPath,
+        out string outputDirectory)
+    {
+        outputDirectory = string.Empty;
+        try
+        {
+            if (string.IsNullOrWhiteSpace(successManifestPath))
+            {
+                return false;
+            }
+
+            var normalizedManifestPath = Path.GetFullPath(successManifestPath);
+            if (string.IsNullOrWhiteSpace(Path.GetFileName(normalizedManifestPath)))
+            {
+                return false;
+            }
+
+            outputDirectory = Path.GetDirectoryName(normalizedManifestPath) ?? string.Empty;
+            return outputDirectory.Length != 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryNormalizeDirectChildPath(
+        string? path,
+        string outputDirectory,
+        out string normalizedPath)
+    {
+        normalizedPath = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            normalizedPath = Path.GetFullPath(Path.Combine(outputDirectory, path));
+            var parent = Path.GetDirectoryName(normalizedPath);
+            var fileName = Path.GetFileName(normalizedPath);
+            return parent != null &&
+                string.Equals(parent, outputDirectory, StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(fileName) &&
+                fileName != "." &&
+                fileName != "..";
+        }
+        catch (Exception)
+        {
+            normalizedPath = string.Empty;
+            return false;
+        }
+    }
+
+    private static bool RejectManifest(
+        string path,
+        out TransformManifestData manifest)
+    {
+        manifest = TransformManifestData.Empty;
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception)
+        {
+            // The caller will still treat the manifest as unusable and rerun the transform.
+        }
+
+        return false;
     }
 
     private static void WriteIfChanged(string path, string content)

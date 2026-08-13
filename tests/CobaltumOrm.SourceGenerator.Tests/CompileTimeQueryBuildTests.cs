@@ -519,6 +519,40 @@ public sealed class CompileTimeQueryBuildTests
     }
 
     [Fact]
+    public void CorruptSuccessManifestOutsideOutputIsIgnoredAndNotCleaned()
+    {
+        var fixture = CreateBuildFixture(ValidQuerySource());
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+
+        var externalPath = Path.GetFullPath(Path.Combine(fixture.TaskDirectory, "..", "outside.cs"));
+        File.WriteAllText(externalPath, "public static class ExternalOutput { }\n");
+        var escapedExternalPath = SecurityElement.Escape(externalPath);
+        File.WriteAllText(fixture.SuccessManifestPath, $"""
+            <CobaltumOrmTransformSuccess version="1">
+              <ProcessedSources />
+              <TransformedSources>
+                <Source itemSpec="{escapedExternalPath}" CobaltumOrmTransformed="true" />
+              </TransformedSources>
+              <Outputs>
+                <Output path="{escapedExternalPath}" />
+              </Outputs>
+            </CobaltumOrmTransformSuccess>
+            """);
+
+        var second = fixture.Build();
+        Assert.True(second.Succeeded, second.Output);
+        Assert.DoesNotContain(
+            File.ReadAllLines(fixture.FileWritesPath),
+            line => string.Equals(Path.GetFullPath(line), externalPath, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(externalPath, File.ReadAllText(fixture.SuccessManifestPath), StringComparison.Ordinal);
+
+        var clean = fixture.Clean();
+        Assert.True(clean.Succeeded, clean.Output);
+        Assert.True(File.Exists(externalPath));
+    }
+
+    [Fact]
     public void FailedBuildWithoutManifestIsRetriedUnchanged()
     {
         var fixture = CreateBuildFixture("""
@@ -936,6 +970,13 @@ public sealed class CompileTimeQueryBuildTests
                                   Lines="@(Compile->'%(FullPath)|%(AutoGen)|%(DesignTime)')"
                                   Overwrite="true" />
               </Target>
+              <Target Name="CaptureCobaltumFileWrites"
+                      BeforeTargets="CoreCompile"
+                      DependsOnTargets="CobaltumOrmTransformSources">
+                <WriteLinesToFile File="$(IntermediateOutputPath)CobaltumFileWrites.txt"
+                                  Lines="@(FileWrites->'%(FullPath)')"
+                                  Overwrite="true" />
+              </Target>
               <Import Project="{{sourceGeneratorTargets}}" />
             </Project>
             """);
@@ -946,7 +987,8 @@ public sealed class CompileTimeQueryBuildTests
             Path.Combine(directory, "Consumer.cs"),
             taskDirectory,
             Path.Combine(directory, "obj", "Release", "net10.0", "CobaltumCompileItems.txt"),
-            Path.Combine(taskDirectory, "CobaltumOrm.TransformSuccess.xml"));
+            Path.Combine(taskDirectory, "CobaltumOrm.TransformSuccess.xml"),
+            Path.Combine(directory, "obj", "Release", "net10.0", "CobaltumFileWrites.txt"));
     }
 
     private static string CSharpLiteral(string value) =>
@@ -1024,7 +1066,8 @@ public sealed class CompileTimeQueryBuildTests
             string consumerPath,
             string taskDirectory,
             string compileItemsPath,
-            string successManifestPath)
+            string successManifestPath,
+            string fileWritesPath)
         {
             RootDirectory = rootDirectory;
             ProjectPath = projectPath;
@@ -1032,6 +1075,7 @@ public sealed class CompileTimeQueryBuildTests
             TaskDirectory = taskDirectory;
             CompileItemsPath = compileItemsPath;
             SuccessManifestPath = successManifestPath;
+            FileWritesPath = fileWritesPath;
         }
 
         internal string RootDirectory { get; }
@@ -1045,6 +1089,8 @@ public sealed class CompileTimeQueryBuildTests
         internal string CompileItemsPath { get; }
 
         internal string SuccessManifestPath { get; }
+
+        internal string FileWritesPath { get; }
 
         private bool _hasBuilt;
 
@@ -1065,6 +1111,19 @@ public sealed class CompileTimeQueryBuildTests
                 .ToArray();
             var process = RunDotnet(RootDirectory, arguments);
             _hasBuilt = true;
+            return new BuildResult(RootDirectory, process.ExitCode == 0, process.Output);
+        }
+
+        internal BuildResult Clean()
+        {
+            var process = RunDotnet(
+                RootDirectory,
+                "clean",
+                ProjectPath,
+                "-c",
+                "Release",
+                "-p:BuildProjectReferences=false",
+                "--nologo");
             return new BuildResult(RootDirectory, process.ExitCode == 0, process.Output);
         }
 

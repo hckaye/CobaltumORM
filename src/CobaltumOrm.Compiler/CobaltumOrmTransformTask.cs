@@ -49,8 +49,15 @@ public sealed class CobaltumOrmTransformTask : Task
     {
         try
         {
+            DeleteSuccessManifest();
             var succeeded = Transform();
-            if (succeeded && !string.IsNullOrWhiteSpace(SuccessManifestPath))
+            if (!succeeded)
+            {
+                DeleteSuccessManifest();
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(SuccessManifestPath))
             {
                 CobaltumOrmTransformManifest.WriteSuccessManifest(
                     SuccessManifestPath!,
@@ -62,8 +69,17 @@ public sealed class CobaltumOrmTransformTask : Task
         }
         catch (Exception exception)
         {
+            DeleteSuccessManifest();
             Log.LogErrorFromException(exception, showStackTrace: true);
             return false;
+        }
+    }
+
+    private void DeleteSuccessManifest()
+    {
+        if (!string.IsNullOrWhiteSpace(SuccessManifestPath))
+        {
+            File.Delete(SuccessManifestPath!);
         }
     }
 
@@ -102,11 +118,6 @@ public sealed class CobaltumOrmTransformTask : Task
         if (!result.Succeeded)
         {
             return false;
-        }
-
-        if (result.Artifacts.Count == 0)
-        {
-            return true;
         }
 
         Directory.CreateDirectory(OutputDirectory);
