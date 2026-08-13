@@ -1,4 +1,7 @@
 using System;
+using System.Data;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using CobaltumOrm;
 using CobaltumOrm.Migrations;
@@ -74,6 +77,49 @@ public sealed class PostgreSqlTypeE2ETests
         Assert.Equal(1, row.Id);
         Assert.Contains("\"updated\": true", row.Document, StringComparison.Ordinal);
         await transaction.RollbackAsync();
+    }
+
+    [Fact]
+    public async Task RawParametersKeepSqlInjectionPayloadsOutOfCommandText()
+    {
+        await using var connection = await OpenConnectionAsync();
+        const string hostileValue = "x'; DROP TABLE e2e_values; --";
+
+        var rows = await connection.NoCheckQuery("SELECT @value::text AS value")
+            .WithParameter("@value", hostileValue, DbType.String)
+            .ReadAsync();
+
+        Assert.Equal(hostileValue, Assert.Single(rows)["value"]);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT to_regclass('e2e_values')::text;";
+        Assert.Equal("e2e_values", await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task GeneratedQueriesCanRunConcurrentlyOnIndependentConnections()
+    {
+        var localTime = new DateTime(2026, 8, 10, 12, 34, 56, DateTimeKind.Unspecified);
+
+        var ids = await Task.WhenAll(Enumerable.Range(0, 12).Select(async _ =>
+        {
+            await using var connection = await OpenConnectionAsync();
+            return Assert.Single(await PostgreSqlE2EQueries.FindByLocalTimeAsync(connection, localTime)).Id;
+        }));
+
+        Assert.All(ids, id => Assert.Equal(1, id));
+    }
+
+    [Fact]
+    public async Task CancellationStopsALongRunningQueryAndLeavesTheConnectionUsable()
+    {
+        await using var connection = await OpenConnectionAsync();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => connection.NoCheckQuery("SELECT pg_sleep(10)").ReadAsync(cancellation.Token));
+
+        var row = Assert.Single(await connection.NoCheckQuery("SELECT 1 AS value").ReadAsync());
+        Assert.Equal(1, row["value"]);
     }
 
     [Fact]

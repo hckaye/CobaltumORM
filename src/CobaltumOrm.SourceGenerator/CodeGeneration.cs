@@ -411,6 +411,7 @@ internal static class GeneratedSourceWriter
                         .Append(CSharpNames.Literal(databaseTypeName));
                 }
 
+                builder.Append(", '").Append(dialect.Provider == DatabaseProvider.Oracle ? ':' : '@').Append("'");
                 builder.AppendLine(");");
             }
 

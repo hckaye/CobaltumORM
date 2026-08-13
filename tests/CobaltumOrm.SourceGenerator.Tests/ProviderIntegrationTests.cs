@@ -68,6 +68,7 @@ public sealed class ProviderIntegrationTests
         Assert.Contains(queryLiteral, result.GeneratedText, StringComparison.Ordinal);
         Assert.Contains(provider.Parameter, result.GeneratedText, StringComparison.Ordinal);
         Assert.Contains(provider.ExpectedDbType, result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains(", '" + provider.Parameter[0] + "');", result.GeneratedText, StringComparison.Ordinal);
         Assert.Contains(
             (provider.QueryParameterType == "long"
                 ? "global::System.Int64? id"

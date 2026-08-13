@@ -37,6 +37,7 @@ internal sealed class QueryFakeDbConnection : DbConnection
     internal List<DbDataReader> Readers { get; } = new List<DbDataReader>();
     internal List<CancellationToken> OpenTokens { get; } = new List<CancellationToken>();
     internal int CloseCount { get; private set; }
+    internal Exception? OpenExceptionAfterStateChange { get; set; }
 
     public override string ConnectionString { get; set; } = string.Empty;
     public override string Database => "fake";
@@ -58,6 +59,11 @@ internal sealed class QueryFakeDbConnection : DbConnection
         cancellationToken.ThrowIfCancellationRequested();
         OpenTokens.Add(cancellationToken);
         _state = ConnectionState.Open;
+        if (OpenExceptionAfterStateChange != null)
+        {
+            throw OpenExceptionAfterStateChange;
+        }
+
         return Task.CompletedTask;
     }
 

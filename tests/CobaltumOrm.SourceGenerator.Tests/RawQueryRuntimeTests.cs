@@ -77,6 +77,23 @@ public sealed class RawQueryRuntimeTests
     }
 
     [Fact]
+    public async Task ClosesAConnectionWhenOpeningChangesStateAndThenFails()
+    {
+        var connection = new QueryFakeDbConnection
+        {
+            OpenExceptionAfterStateChange = new InvalidOperationException("open failed"),
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => connection.Query("SELECT 1").ReadAsync());
+
+        Assert.Equal("open failed", exception.Message);
+        Assert.Equal(ConnectionState.Closed, connection.State);
+        Assert.Equal(1, connection.CloseCount);
+        Assert.Empty(connection.Commands);
+    }
+
+    [Fact]
     public async Task NoCheckQueryCreatesAnUntypedExecutableCommand()
     {
         var connection = QueryFakeDbConnection.WithColumns(
@@ -119,6 +136,28 @@ public sealed class RawQueryRuntimeTests
 
         Assert.Throws<ArgumentException>(() => parameterized.WithParameter("@VALUE", 2));
         Assert.Equal(original.Sql, parameterized.Sql);
+    }
+
+    [Fact]
+    public void RejectsEquivalentOracleParameterNamesBeforeExecution()
+    {
+        var connection = new QueryFakeDbConnection();
+        var query = connection.Query("SELECT :value FROM dual").WithParameter(":value", 1);
+
+        Assert.Throws<ArgumentException>(() => query.WithParameter("value", 2));
+        Assert.Throws<ArgumentException>(() => connection.Query("SELECT :").WithParameter(":", 1));
+    }
+
+    [Fact]
+    public void ParameterHelperValidatesNamesAndNormalizesOraclePrefixes()
+    {
+        var command = new QueryFakeDbCommand(new QueryFakeDbConnection());
+
+        Assert.Throws<ArgumentException>(() => CobaltumParameter.Add(command, "", 1));
+        Assert.Throws<ArgumentException>(() => CobaltumParameter.Add(command, ":", 1));
+        CobaltumParameter.Add(command, ":id", 7, DbType.Int32);
+
+        Assert.Equal(7, command.ParameterValues["id"].Value);
     }
 
     [Fact]
@@ -297,6 +336,34 @@ public sealed class RawQueryRuntimeTests
         Assert.Equal(2, command.ParameterValues.Count);
         Assert.Equal(7, command.ParameterValues["@__cobaltum_where_0"].Value);
         Assert.Equal("alice", command.ParameterValues["@__cobaltum_where_1"].Value);
+    }
+
+    [Fact]
+    public async Task OracleQueryChainsUseColonSqlAndUnprefixedProviderParameterNames()
+    {
+        var id = new CobaltumColumn<FilterRecord, int>("\"ID\"", DbType.Int32, ':');
+        var name = new CobaltumColumn<FilterRecord, string?>("\"NAME\"", DbType.String, ':');
+        var definition = new CobaltumQueryDefinition<FilterRecord>(
+            "SELECT \"ID\", \"NAME\" FROM \"USERS\"",
+            static _ => { },
+            static reader => new FilterRecord(
+                reader.GetInt32(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1)));
+        var query = definition.Where(id.Equal(7)).Where(name.Equal("alice"));
+        var connection = QueryFakeDbConnection.WithColumns(
+            new[] { "ID", "NAME" },
+            new object?[] { 7, "alice" });
+
+        var rows = await connection.Query(query);
+
+        Assert.Equal(7, Assert.Single(rows).Id);
+        Assert.Equal(
+            "SELECT \"ID\", \"NAME\" FROM \"USERS\" " +
+            "WHERE \"ID\" = :__cobaltum_where_0 AND \"NAME\" = :__cobaltum_where_1",
+            Assert.Single(connection.Commands).CommandText);
+        var parameters = Assert.Single(connection.Commands).ParameterValues;
+        Assert.Equal(7, parameters["__cobaltum_where_0"].Value);
+        Assert.Equal("alice", parameters["__cobaltum_where_1"].Value);
     }
 
     [Fact]

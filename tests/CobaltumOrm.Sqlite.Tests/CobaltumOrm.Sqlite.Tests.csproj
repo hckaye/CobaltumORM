@@ -18,6 +18,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../../src/CobaltumOrm/CobaltumOrm.csproj" />
     <ProjectReference Include="../../src/CobaltumOrm.Migrations.Sqlite/CobaltumOrm.Migrations.Sqlite.csproj" />
     <ProjectReference Include="../../src/CobaltumOrm.Migrations/CobaltumOrm.Migrations.csproj" />
   </ItemGroup>

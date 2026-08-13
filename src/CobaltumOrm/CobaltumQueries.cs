@@ -94,7 +94,8 @@ public sealed class CobaltumQueryDefinition<TResult>
             throw new ArgumentNullException(nameof(predicate));
         }
 
-        var parameterName = "@__cobaltum_where_" + _nextWhereParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var parameterName = predicate.ParameterName(
+            "__cobaltum_where_" + _nextWhereParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var separator = _hasWhereClause ? " AND " : " WHERE ";
         return new CobaltumQueryDefinition<TResult>(
             Sql + separator + predicate.SqlWithParameter(parameterName),
@@ -206,9 +207,14 @@ public sealed class CobaltumRawQuery
             throw new ArgumentException("A parameter name is required.", nameof(name));
         }
 
+        var providerName = CobaltumParameter.ProviderParameterName(name);
+
         foreach (var existing in _parameters)
         {
-            if (string.Equals(existing.Name, name, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(
+                    CobaltumParameter.ProviderParameterName(existing.Name),
+                    providerName,
+                    StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentException($"Parameter '{name}' has already been added.", nameof(name));
             }
@@ -996,8 +1002,16 @@ internal static class CobaltumConnection
             return false;
         }
 
-        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return true;
+        try
+        {
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            CloseIfOpened(connection, true);
+            throw;
+        }
     }
 
     internal static void CloseIfOpened(DbConnection connection, bool closeWhenFinished)
@@ -1021,7 +1035,7 @@ public static class CobaltumParameter
         }
 
         var parameter = command.CreateParameter();
-        parameter.ParameterName = name;
+        parameter.ParameterName = ProviderParameterName(name);
         parameter.Value = value ?? DBNull.Value;
         command.Parameters.Add(parameter);
     }
@@ -1064,7 +1078,7 @@ public static class CobaltumParameter
         }
 
         var parameter = command.CreateParameter();
-        parameter.ParameterName = name;
+        parameter.ParameterName = ProviderParameterName(name);
         parameter.DbType = dbType;
         configureParameter?.Invoke(parameter);
         parameter.Value = value ?? DBNull.Value;
@@ -1099,6 +1113,26 @@ public static class CobaltumParameter
             default: return false;
         }
     }
+
+    internal static string ProviderParameterName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new ArgumentException("A parameter name is required.", nameof(name));
+        }
+
+        if (name[0] == ':')
+        {
+            if (name.Length == 1)
+            {
+                throw new ArgumentException("A parameter name must follow ':'.", nameof(name));
+            }
+
+            return name.Substring(1);
+        }
+
+        return name;
+    }
 }
 
 /// <summary>A type-safe equality predicate for one generated table record.</summary>
@@ -1109,21 +1143,26 @@ public sealed class CobaltumPredicate<TRecord>
     private readonly bool _isNull;
     private readonly DbType? _dbType;
     private readonly Action<DbParameter>? _configureParameter;
+    private readonly char _parameterPrefix;
 
     internal CobaltumPredicate(
         string quotedName,
         object? value,
         DbType? dbType = null,
-        Action<DbParameter>? configureParameter = null)
+        Action<DbParameter>? configureParameter = null,
+        char parameterPrefix = '@')
     {
         _quotedName = quotedName ?? throw new ArgumentNullException(nameof(quotedName));
         _value = value;
         _isNull = value is null;
         _dbType = dbType;
         _configureParameter = configureParameter;
+        _parameterPrefix = parameterPrefix;
     }
 
-    internal string Sql => SqlWithParameter("@value");
+    internal string Sql => SqlWithParameter(ParameterName("value"));
+
+    internal string ParameterName(string suffix) => _parameterPrefix + suffix;
 
     internal string SqlWithParameter(string parameterName)
     {
@@ -1171,18 +1210,27 @@ public sealed class CobaltumColumn<TRecord, TValue>
     private readonly string _quotedName;
     private readonly DbType? _dbType;
     private readonly Action<DbParameter>? _configureParameter;
+    private readonly char _parameterPrefix;
 
     /// <summary>Initializes a generated column. This constructor is primarily intended for generated code.</summary>
     public CobaltumColumn(string quotedName)
     {
-        _quotedName = quotedName ?? throw new ArgumentNullException(nameof(quotedName));
+        _quotedName = ValidateIdentifier(quotedName);
+        _parameterPrefix = '@';
     }
 
     /// <summary>Initializes a generated column with its database parameter type.</summary>
     public CobaltumColumn(string quotedName, DbType dbType)
+        : this(quotedName, dbType, '@')
     {
-        _quotedName = quotedName ?? throw new ArgumentNullException(nameof(quotedName));
+    }
+
+    /// <summary>Initializes a generated column with its database parameter type and SQL parameter prefix.</summary>
+    public CobaltumColumn(string quotedName, DbType dbType, char parameterPrefix)
+    {
+        _quotedName = ValidateIdentifier(quotedName);
         _dbType = dbType;
+        _parameterPrefix = ValidateParameterPrefix(parameterPrefix);
     }
 
     /// <summary>Initializes a generated column with provider-specific parameter configuration.</summary>
@@ -1191,8 +1239,19 @@ public sealed class CobaltumColumn<TRecord, TValue>
         DbType dbType,
         string databaseTypeName,
         Action<DbParameter> configureParameter)
+        : this(quotedName, dbType, databaseTypeName, configureParameter, '@')
     {
-        _quotedName = quotedName ?? throw new ArgumentNullException(nameof(quotedName));
+    }
+
+    /// <summary>Initializes a generated column with provider-specific configuration and SQL parameter prefix.</summary>
+    public CobaltumColumn(
+        string quotedName,
+        DbType dbType,
+        string databaseTypeName,
+        Action<DbParameter> configureParameter,
+        char parameterPrefix)
+    {
+        _quotedName = ValidateIdentifier(quotedName);
         _dbType = dbType;
         if (string.IsNullOrWhiteSpace(databaseTypeName))
         {
@@ -1200,13 +1259,105 @@ public sealed class CobaltumColumn<TRecord, TValue>
         }
 
         _configureParameter = configureParameter ?? throw new ArgumentNullException(nameof(configureParameter));
+        _parameterPrefix = ValidateParameterPrefix(parameterPrefix);
     }
 
     /// <summary>Builds a parameterized equality predicate.</summary>
     public CobaltumPredicate<TRecord> Equal(TValue value)
     {
-        return new CobaltumPredicate<TRecord>(_quotedName, value, _dbType, _configureParameter);
+        return new CobaltumPredicate<TRecord>(
+            _quotedName,
+            value,
+            _dbType,
+            _configureParameter,
+            _parameterPrefix);
     }
+
+    private static char ValidateParameterPrefix(char parameterPrefix)
+    {
+        if (parameterPrefix != '@' && parameterPrefix != ':')
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(parameterPrefix),
+                "The SQL parameter prefix must be '@' or ':'.");
+        }
+
+        return parameterPrefix;
+    }
+
+    private static string ValidateIdentifier(string quotedName)
+    {
+        if (quotedName is null)
+        {
+            throw new ArgumentNullException(nameof(quotedName));
+        }
+
+        if (!IsSingleIdentifier(quotedName))
+        {
+            throw new ArgumentException(
+                "A column name must be one unquoted or provider-quoted SQL identifier.",
+                nameof(quotedName));
+        }
+
+        return quotedName;
+    }
+
+    private static bool IsSingleIdentifier(string value)
+    {
+        if (value.Length == 0)
+        {
+            return false;
+        }
+
+        var opening = value[0];
+        if (opening == '"' || opening == '`' || opening == '[')
+        {
+            var closing = opening == '[' ? ']' : opening;
+            var hasContent = false;
+            for (var index = 1; index < value.Length; index++)
+            {
+                if (value[index] != closing)
+                {
+                    hasContent = true;
+                    continue;
+                }
+
+                if (index == value.Length - 1)
+                {
+                    return hasContent;
+                }
+
+                if (value[index + 1] != closing)
+                {
+                    return false;
+                }
+
+                hasContent = true;
+                index++;
+            }
+
+            return false;
+        }
+
+        if (!IsUnquotedIdentifierStart(value[0]))
+        {
+            return false;
+        }
+
+        for (var index = 1; index < value.Length; index++)
+        {
+            var character = value[index];
+            if (!char.IsLetterOrDigit(character) && character != '_' && character != '$' && character != '#')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsUnquotedIdentifierStart(char character) =>
+        char.IsLetter(character) || character == '_';
 }
 
 /// <summary>A generated, typed entry point for selecting rows from one table.</summary>
