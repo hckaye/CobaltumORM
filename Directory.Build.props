@@ -2,6 +2,7 @@
   <PropertyGroup>
     <Version>0.0.4</Version>
     <Authors>CobaltumORM contributors</Authors>
+    <PackageReadmeFile>PACKAGE_README.md</PackageReadmeFile>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <IsPackable>false</IsPackable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -9,4 +10,10 @@
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)PACKAGE_README.md"
+          Pack="true"
+          PackagePath="/"
+          Visible="false" />
+  </ItemGroup>
 </Project>

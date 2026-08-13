@@ -4,6 +4,7 @@
     <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
     <RootNamespace>CobaltumOrm</RootNamespace>
     <AssemblyName>CobaltumOrm</AssemblyName>
+    <Description>A .NET ORM with explicit SQL, type-safe row mapping, and generated query APIs.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
   </PropertyGroup>

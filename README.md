@@ -3,6 +3,7 @@
 English | [日本語](README.ja.md)
 
 [![CobaltumOrm](https://img.shields.io/nuget/v/CobaltumOrm.svg?label=CobaltumOrm)](https://www.nuget.org/packages/CobaltumOrm)
+[![CobaltumOrm.Analysis](https://img.shields.io/nuget/v/CobaltumOrm.Analysis.svg?label=CobaltumOrm.Analysis)](https://www.nuget.org/packages/CobaltumOrm.Analysis)
 [![CobaltumOrm.Migrations](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.svg?label=CobaltumOrm.Migrations)](https://www.nuget.org/packages/CobaltumOrm.Migrations)
 [![CobaltumOrm.Migrations.MySql](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.MySql.svg?label=CobaltumOrm.Migrations.MySql)](https://www.nuget.org/packages/CobaltumOrm.Migrations.MySql)
 [![CobaltumOrm.Migrations.Oracle](https://img.shields.io/nuget/v/CobaltumOrm.Migrations.Oracle.svg?label=CobaltumOrm.Migrations.Oracle)](https://www.nuget.org/packages/CobaltumOrm.Migrations.Oracle)

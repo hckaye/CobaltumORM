@@ -4,6 +4,7 @@
     <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
     <RootNamespace>CobaltumOrm.Migrations</RootNamespace>
     <AssemblyName>CobaltumOrm.Migrations</AssemblyName>
+    <Description>Provider-neutral migration API and runtime for CobaltumORM.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
   </PropertyGroup>

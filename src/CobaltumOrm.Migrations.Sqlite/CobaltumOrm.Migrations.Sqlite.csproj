@@ -4,6 +4,7 @@
     <IsAotCompatible Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">true</IsAotCompatible>
     <RootNamespace>CobaltumOrm.Migrations.Sqlite</RootNamespace>
     <AssemblyName>CobaltumOrm.Migrations.Sqlite</AssemblyName>
+    <Description>SQLite migration and schema support for CobaltumORM.</Description>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
