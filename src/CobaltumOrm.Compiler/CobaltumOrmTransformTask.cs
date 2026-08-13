@@ -27,6 +27,8 @@ public sealed class CobaltumOrmTransformTask : Task
     [Required]
     public string OutputDirectory { get; set; } = string.Empty;
 
+    public string? SuccessManifestPath { get; set; }
+
     public string? DefineConstants { get; set; }
 
     public string? LangVersion { get; set; }
@@ -47,12 +49,58 @@ public sealed class CobaltumOrmTransformTask : Task
     {
         try
         {
-            return Transform();
+            DeleteSuccessManifestOrThrow();
         }
         catch (Exception exception)
         {
             Log.LogErrorFromException(exception, showStackTrace: true);
             return false;
+        }
+
+        try
+        {
+            var succeeded = Transform();
+            if (!succeeded)
+            {
+                DeleteSuccessManifestBestEffort();
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(SuccessManifestPath))
+            {
+                CobaltumOrmTransformManifest.WriteSuccessManifest(
+                    SuccessManifestPath!,
+                    ProcessedSources,
+                    TransformedSources);
+            }
+
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Log.LogErrorFromException(exception, showStackTrace: true);
+            DeleteSuccessManifestBestEffort();
+            return false;
+        }
+    }
+
+    private void DeleteSuccessManifestOrThrow()
+    {
+        if (!string.IsNullOrWhiteSpace(SuccessManifestPath))
+        {
+            File.Delete(SuccessManifestPath!);
+        }
+    }
+
+    private void DeleteSuccessManifestBestEffort()
+    {
+        try
+        {
+            DeleteSuccessManifestOrThrow();
+        }
+        catch (Exception)
+        {
+            // Preserve the original transform diagnostic or exception.
         }
     }
 
@@ -91,11 +139,6 @@ public sealed class CobaltumOrmTransformTask : Task
         if (!result.Succeeded)
         {
             return false;
-        }
-
-        if (result.Artifacts.Count == 0)
-        {
-            return true;
         }
 
         Directory.CreateDirectory(OutputDirectory);
