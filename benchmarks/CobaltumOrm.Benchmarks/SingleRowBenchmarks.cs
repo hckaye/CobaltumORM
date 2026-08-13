@@ -16,38 +16,43 @@ public class SingleRowBenchmarks : OrmBenchmarkBase
     private const int Id = 5000;
 
     [Benchmark]
-    public Task<IReadOnlyList<BenchmarkPost>> CobaltumORM() =>
-        CobaltumBenchmarkQueries.FindByIdAsync(Connection, Id);
+    public async Task<int> CobaltumORM() =>
+        (await CobaltumBenchmarkQueries.FindByIdAsync(Connection, Id).ConfigureAwait(false)).Count;
 
     [Benchmark]
-    public Task<IEnumerable<BenchmarkPost>> Dapper() =>
-        SqlMapper.QueryAsync<BenchmarkPost>(
+    public async Task<int> Dapper() =>
+        (await SqlMapper.QueryAsync<BenchmarkPost>(
             Connection,
             BenchmarkSql.FindById,
-            new { id = Id });
+            new { id = Id }).ConfigureAwait(false)).AsList().Count;
 
     [Benchmark]
-    public Task<List<BenchmarkPost>> EFCore() =>
-        EfContext.Posts
+    public async Task<int> EFCore() =>
+        (await EfContext.Posts
             .Where(post => post.Id == Id)
             .Take(1)
-            .ToListAsync();
+            .ToListAsync()
+            .ConfigureAwait(false)).Count;
 
     [Benchmark]
-    public Task<BenchmarkPost[]> LinqToDB() =>
-        LinqToDb.GetTable<BenchmarkPost>()
+    public async Task<int> LinqToDB() =>
+        (await LinqToDb.GetTable<BenchmarkPost>()
             .Where(post => post.Id == Id)
             .Take(1)
-            .ToArrayAsync();
+            .ToArrayAsync()
+            .ConfigureAwait(false)).Length;
 
     [Benchmark]
-    public Task<IEnumerable<BenchmarkPost>> RepoDB() =>
-        Connection.ExecuteQueryAsync<BenchmarkPost>(
+    public async Task<int> RepoDB()
+    {
+        var rows = await Connection.ExecuteQueryAsync<BenchmarkPost>(
             BenchmarkSql.FindById,
-            new { id = Id });
+            new { id = Id }).ConfigureAwait(false);
+        return rows.TryGetNonEnumeratedCount(out var count) ? count : rows.Count();
+    }
 
     [Benchmark(Baseline = true)]
-    public async Task<List<BenchmarkPost>> AdoNet()
+    public async Task<int> AdoNet()
     {
         await using var command = new NpgsqlCommand(BenchmarkSql.FindById, Connection);
         command.Parameters.Add("id", NpgsqlTypes.NpgsqlDbType.Integer).Value = Id;
@@ -60,6 +65,6 @@ public class SingleRowBenchmarks : OrmBenchmarkBase
             rows.Add(ReadPost(reader));
         }
 
-        return rows;
+        return rows.Count;
     }
 }

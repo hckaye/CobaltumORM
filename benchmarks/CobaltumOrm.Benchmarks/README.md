@@ -61,6 +61,44 @@ The comparisons use these conditions:
 
 The measurements include the PostgreSQL round trip. For the single-row workload, database communication can be larger than the ORM's own processing time. Do not directly compare results collected on different machines or under different system load.
 
+## Reference results from August 13, 2026
+
+The default BenchmarkDotNet job completed all 18 benchmarks in 24 minutes 44 seconds. Unrelated compiler, build, and test processes were not running when the measurement started. Normal desktop and Docker background processes remained active.
+
+The measurement environment was:
+
+- Apple M5 with 10 physical and 10 logical cores
+- macOS Tahoe 26.5.2
+- .NET SDK 10.0.203 and .NET 10.0.7
+- BenchmarkDotNet 0.15.8
+- PostgreSQL 18 from `postgres:18-alpine`
+
+The time values below are the arithmetic mean and half of the 99.9% confidence interval reported by BenchmarkDotNet.
+
+| Method | 1 row | 10 rows | 1,000 rows |
+| --- | ---: | ---: | ---: |
+| CobaltumORM | 180.0 ± 3.55 μs | 156.2 ± 3.05 μs | 979.5 ± 49.03 μs |
+| Dapper | 180.4 ± 3.60 μs | 155.2 ± 3.04 μs | 971.9 ± 42.85 μs |
+| EF Core | 188.8 ± 3.57 μs | 176.5 ± 3.46 μs | 1,227.6 ± 89.18 μs |
+| LINQ to DB | 185.3 ± 3.66 μs | 233.3 ± 11.00 μs | 1,086.7 ± 60.44 μs |
+| RepoDB | 280.7 ± 30.68 μs | 218.5 ± 8.91 μs | 995.3 ± 51.28 μs |
+| ADO.NET | 287.6 ± 21.43 μs | 191.0 ± 4.86 μs | 980.5 ± 52.49 μs |
+
+Managed memory allocated per operation was:
+
+| Method | 1 row | 10 rows | 1,000 rows |
+| --- | ---: | ---: | ---: |
+| CobaltumORM | 2.72 KB | 7.68 KB | 578.98 KB |
+| Dapper | 3.00 KB | 8.71 KB | 673.21 KB |
+| EF Core | 10.23 KB | 17.50 KB | 774.42 KB |
+| LINQ to DB | 8.27 KB | 14.20 KB | 595.96 KB |
+| RepoDB | 3.67 KB | 8.54 KB | 580.02 KB |
+| ADO.NET | 3.09 KB | 7.65 KB | 571.63 KB |
+
+CobaltumORM and Dapper differed by less than 1% in mean execution time for all three workloads. CobaltumORM allocated 9% to 14% less managed memory than Dapper in this run.
+
+BenchmarkDotNet reported multimodal distributions for some RepoDB, EF Core, LINQ to DB, and ADO.NET measurements, and removed outliers from several measurements. Treat small differences as measurement variation and repeat the benchmark on the target machine before making performance decisions. These results measure SQL execution and materialization. They do not measure build time, incremental source generator execution, or compile-time query analysis.
+
 ## Use an existing PostgreSQL server
 
 Set `COBALTUM_BENCHMARK_CONNECTION_STRING` to skip the Docker container and connect to an existing PostgreSQL server:
