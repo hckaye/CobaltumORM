@@ -55,7 +55,7 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 | [EF Core](https://learn.microsoft.com/en-us/ef/core/) | Use `DbContext`, entity models, LINQ, and change tracking. APIs for direct SQL execution are also available | Use LINQ projections or types in the model, including entities, keyless entities, and scalar types |
 | [Dapper](https://github.com/DapperLib/Dapper) | Pass SQL and parameters to `DbConnection` extension methods such as `Query<T>` and `Execute` | Map rows to the type supplied to `Query<T>`, or return rows whose columns are resolved at runtime with `Query` |
 
-The [benchmark project](benchmarks/CobaltumOrm.Benchmarks/README.md) runs PostgreSQL comparisons for CobaltumORM, Dapper, EF Core, LINQ to DB, RepoDB, and ADO.NET. It starts a Docker container and creates the test data automatically.
+In the measured PostgreSQL read workloads, CobaltumORM performed at a similar level to the other ORMs. See the [benchmark results and instructions](benchmarks/CobaltumOrm.Benchmarks/README.md) for the measurements and how to reproduce them.
 
 ## Database providers
 

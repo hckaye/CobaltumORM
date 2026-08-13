@@ -51,6 +51,7 @@ jobs:
         run: |
           projects=(
             src/CobaltumOrm/CobaltumOrm.csproj
+            src/CobaltumOrm.Analysis/CobaltumOrm.Analysis.csproj
             src/CobaltumOrm.Migrations/CobaltumOrm.Migrations.csproj
             src/CobaltumOrm.Migrations.MySql/CobaltumOrm.Migrations.MySql.csproj
             src/CobaltumOrm.Migrations.Oracle/CobaltumOrm.Migrations.Oracle.csproj

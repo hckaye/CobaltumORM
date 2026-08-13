@@ -63,8 +63,6 @@ The measurements include the PostgreSQL round trip. For the single-row workload,
 
 ## Reference results from August 13, 2026
 
-The default BenchmarkDotNet job completed all 18 benchmarks in 24 minutes 44 seconds. Unrelated compiler, build, and test processes were not running when the measurement started. Normal desktop and Docker background processes remained active.
-
 The measurement environment was:
 
 - Apple M5 with 10 physical and 10 logical cores

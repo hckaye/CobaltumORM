@@ -55,7 +55,7 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 | [EF Core](https://learn.microsoft.com/en-us/ef/core/) | `DbContext`、エンティティ、LINQ、変更追跡を使う。SQL を直接実行する API もある | LINQ の射影や、モデルに含まれるエンティティ、キーレスエンティティ、単一の値を表す型を使う |
 | [Dapper](https://github.com/DapperLib/Dapper) | `DbConnection` の `Query<T>` や `Execute` に SQL とパラメーターを渡す | `Query<T>` で指定した型へ変換するか、`Query` で実行時に列が決まる行を返す |
 
-PostgreSQL を使った CobaltumORM、Dapper、EF Core、LINQ to DB、RepoDB、ADO.NET の実測比較は、[ベンチマークプロジェクト](benchmarks/CobaltumOrm.Benchmarks/README.ja.md)から実行できます。Docker コンテナの起動とテストデータの作成は自動です。
+PostgreSQL の読み取りベンチマークでは、CobaltumORM は比較対象の ORM と同程度の性能でした。測定結果と再現手順は[ベンチマーク結果](benchmarks/CobaltumOrm.Benchmarks/README.ja.md)に記載しています。
 
 ## データベースプロバイダー
 
