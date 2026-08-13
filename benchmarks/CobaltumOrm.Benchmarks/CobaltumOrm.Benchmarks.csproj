@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>CobaltumOrm.Benchmarks</RootNamespace>
+    <AssemblyName>CobaltumOrm.Benchmarks</AssemblyName>
+    <CobaltumOrmGeneratedNamespace>CobaltumOrm.Benchmarks.Generated</CobaltumOrmGeneratedNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageReference Include="Dapper" Version="2.1.79" />
+    <PackageReference Include="linq2db" Version="6.3.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.10" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="RepoDb" Version="1.15.1" />
+    <PackageReference Include="RepoDb.PostgreSql" Version="1.14.1" />
+    <PackageReference Include="SSH.NET" Version="2026.0.0" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.13.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/CobaltumOrm/CobaltumOrm.csproj" />
+    <ProjectReference Include="../../src/CobaltumOrm.SourceGenerator/CobaltumOrm.SourceGenerator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <AdditionalFiles Include="Migrations/V*__*.sql" />
+    <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
+  </ItemGroup>
+</Project>

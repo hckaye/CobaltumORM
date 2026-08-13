@@ -2,3 +2,4 @@ bin/
 obj/
 .packages/
 .nuget-http-cache/
+BenchmarkDotNet.Artifacts/
