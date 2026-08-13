@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Xml.Linq;
 using Microsoft.Build.Framework;
@@ -13,6 +14,10 @@ namespace CobaltumOrm.Compiler;
 internal static class CobaltumOrmTransformManifest
 {
     private const string ManifestVersion = "1";
+    internal static readonly StringComparer PathComparer =
+        RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
 
     internal static void WriteInputManifest(
         string path,
@@ -65,7 +70,7 @@ internal static class CobaltumOrmTransformManifest
                     transformed
                         .Select(item => FullPath(item))
                         .Where(pathValue => pathValue != null)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Distinct(PathComparer)
                         .Select(pathValue => new XElement(
                             "Output",
                             new XAttribute("path", pathValue!))))));
@@ -149,7 +154,7 @@ internal static class CobaltumOrmTransformManifest
                     .Select(FullPath)
                     .Where(outputPath => outputPath != null)
                     .Cast<string>(),
-                StringComparer.OrdinalIgnoreCase);
+                PathComparer);
             if (transformedSources
                 .Select(FullPath)
                 .Where(transformedPath => transformedPath != null)
@@ -312,7 +317,7 @@ internal static class CobaltumOrmTransformManifest
             var parent = Path.GetDirectoryName(normalizedPath);
             var fileName = Path.GetFileName(normalizedPath);
             return parent != null &&
-                string.Equals(parent, outputDirectory, StringComparison.OrdinalIgnoreCase) &&
+                PathComparer.Equals(parent, outputDirectory) &&
                 !string.IsNullOrWhiteSpace(fileName) &&
                 fileName != "." &&
                 fileName != "..";
@@ -462,7 +467,7 @@ public sealed class CobaltumOrmCollectTransformInputsTask : Task
                 .Concat(additionalPaths)
                 .Concat(referencePaths)
                 .Select(input => input.Path)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Distinct(CobaltumOrmTransformManifest.PathComparer)
                 .Select(path => new TaskItem(path))
                 .Cast<ITaskItem>()
                 .ToArray();
@@ -509,7 +514,7 @@ public sealed class CobaltumOrmCollectTransformInputsTask : Task
             })
             .Where(input => input != null)
             .Cast<TransformInputPath>()
-            .GroupBy(input => input.Path, StringComparer.OrdinalIgnoreCase)
+            .GroupBy(input => input.Path, CobaltumOrmTransformManifest.PathComparer)
             .Select(group => group.First())
             .OrderBy(input => input.Path, StringComparer.Ordinal);
     }

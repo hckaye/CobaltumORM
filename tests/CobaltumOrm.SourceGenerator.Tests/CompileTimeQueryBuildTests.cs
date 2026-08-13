@@ -553,6 +553,55 @@ public sealed class CompileTimeQueryBuildTests
     }
 
     [Fact]
+    public void CorruptSuccessManifestCaseDifferentSiblingIsIgnoredOnUnix()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var fixture = CreateBuildFixture(ValidQuerySource());
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+
+        var outputDirectory = Directory.GetParent(fixture.TaskDirectory)!.FullName;
+        var outputDirectoryName = Path.GetFileName(fixture.TaskDirectory);
+        var siblingName = outputDirectoryName.ToLowerInvariant();
+        Assert.NotEqual(outputDirectoryName, siblingName);
+        var externalDirectory = Path.Combine(outputDirectory, siblingName);
+        // A case-insensitive Unix volume cannot represent a physical sibling
+        // with only a case difference, but the alternate path still exercises
+        // the ordinal manifest boundary check.
+        Directory.CreateDirectory(externalDirectory);
+        var externalPath = Path.Combine(externalDirectory, "outside.cs");
+        File.WriteAllText(externalPath, "public static class ExternalOutput { }\n");
+
+        var escapedExternalPath = SecurityElement.Escape(externalPath);
+        File.WriteAllText(fixture.SuccessManifestPath, $"""
+            <CobaltumOrmTransformSuccess version="1">
+              <ProcessedSources />
+              <TransformedSources>
+                <Source itemSpec="{escapedExternalPath}" CobaltumOrmTransformed="true" />
+              </TransformedSources>
+              <Outputs>
+                <Output path="{escapedExternalPath}" />
+              </Outputs>
+            </CobaltumOrmTransformSuccess>
+            """);
+
+        var second = fixture.Build();
+        Assert.True(second.Succeeded, second.Output);
+        Assert.DoesNotContain(
+            File.ReadAllLines(fixture.FileWritesPath),
+            line => string.Equals(Path.GetFullPath(line), externalPath, StringComparison.Ordinal));
+        Assert.DoesNotContain(externalPath, File.ReadAllText(fixture.SuccessManifestPath), StringComparison.Ordinal);
+
+        var clean = fixture.Clean();
+        Assert.True(clean.Succeeded, clean.Output);
+        Assert.True(File.Exists(externalPath));
+    }
+
+    [Fact]
     public void FailedBuildWithoutManifestIsRetriedUnchanged()
     {
         var fixture = CreateBuildFixture("""

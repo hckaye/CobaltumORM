@@ -49,11 +49,20 @@ public sealed class CobaltumOrmTransformTask : Task
     {
         try
         {
-            DeleteSuccessManifest();
+            DeleteSuccessManifestOrThrow();
+        }
+        catch (Exception exception)
+        {
+            Log.LogErrorFromException(exception, showStackTrace: true);
+            return false;
+        }
+
+        try
+        {
             var succeeded = Transform();
             if (!succeeded)
             {
-                DeleteSuccessManifest();
+                DeleteSuccessManifestBestEffort();
                 return false;
             }
 
@@ -65,21 +74,33 @@ public sealed class CobaltumOrmTransformTask : Task
                     TransformedSources);
             }
 
-            return succeeded;
+            return true;
         }
         catch (Exception exception)
         {
-            DeleteSuccessManifest();
             Log.LogErrorFromException(exception, showStackTrace: true);
+            DeleteSuccessManifestBestEffort();
             return false;
         }
     }
 
-    private void DeleteSuccessManifest()
+    private void DeleteSuccessManifestOrThrow()
     {
         if (!string.IsNullOrWhiteSpace(SuccessManifestPath))
         {
             File.Delete(SuccessManifestPath!);
+        }
+    }
+
+    private void DeleteSuccessManifestBestEffort()
+    {
+        try
+        {
+            DeleteSuccessManifestOrThrow();
+        }
+        catch (Exception)
+        {
+            // Preserve the original transform diagnostic or exception.
         }
     }
 
