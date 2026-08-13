@@ -14,9 +14,25 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageOutputPath>../../.packages</PackageOutputPath>
     <RollForward>Major</RollForward>
+    <DefineConstants>$(DefineConstants);COBALTUM_COMPILER_TASK</DefineConstants>
+    <NoWarn>$(NoWarn);CS1591;RS2008</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Explicit generation runs the same analysis and code writers as the source generator and
+         the MSBuild transform task. The files are shared, not copied. -->
+    <Compile Include="../CobaltumOrm.Analysis/*.cs" Link="Analysis/%(Filename)%(Extension)" />
+    <Compile Include="../CobaltumOrm.SourceGenerator/*.cs" Link="SourceGenerator/%(Filename)%(Extension)" />
+    <Compile Include="../CobaltumOrm.Compiler/Generation/*.cs" Link="Generation/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="msbuild/CobaltumOrm.Generate.targets"
+                      LogicalName="CobaltumOrm.Tool.Templates.CobaltumOrm.Generate.targets" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../templates/CobaltumOrm.Templates/content/CobaltumMigrations/CobaltumMigrations.csproj"

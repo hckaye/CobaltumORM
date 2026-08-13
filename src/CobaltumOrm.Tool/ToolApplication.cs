@@ -8,17 +8,20 @@ internal sealed class ToolApplication
     private readonly TextWriter _output;
     private readonly TextWriter _error;
     private readonly IProcessRunner _processRunner;
+    private readonly IProjectEvaluator _projectEvaluator;
     private readonly string _currentDirectory;
 
     public ToolApplication(
         TextWriter output,
         TextWriter error,
         IProcessRunner processRunner,
-        string? currentDirectory = null)
+        string? currentDirectory = null,
+        IProjectEvaluator? projectEvaluator = null)
     {
         _output = output;
         _error = error;
         _processRunner = processRunner;
+        _projectEvaluator = projectEvaluator ?? new MsBuildProjectEvaluator();
         _currentDirectory = Path.GetFullPath(currentDirectory ?? Directory.GetCurrentDirectory());
     }
 
@@ -30,6 +33,19 @@ internal sealed class ToolApplication
             {
                 WriteHelp(_output);
                 return 0;
+            }
+
+            if (string.Equals(args[0], "generate", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                return await new GenerateCommand(_output, _error, _projectEvaluator, _currentDirectory)
+                    .RunAsync(GenerateOptions.Parse(args), cancellationToken)
+                    .ConfigureAwait(false);
             }
 
             if (!string.Equals(args[0], "migrations", StringComparison.OrdinalIgnoreCase) &&
@@ -383,9 +399,10 @@ internal sealed class ToolApplication
 
     private static void WriteHelp(TextWriter writer)
     {
-        writer.WriteLine("CobaltumORM migration tool");
+        writer.WriteLine("CobaltumORM tool");
         writer.WriteLine();
         writer.WriteLine("Usage:");
+        writer.WriteLine("  cobaltum generate [--project <path>] [--output-mode <mode>] [--output <dir>]");
         writer.WriteLine("  cobaltum migrations init <project-name> [--provider <name>] [--output <path>] [--framework <tfm>]");
         writer.WriteLine("  cobaltum migrations add <name> [--version <number>] [--project <path>]");
         writer.WriteLine("  cobaltum migrations list [--project <path>]");
@@ -405,6 +422,19 @@ internal sealed class ToolApplication
         writer.WriteLine("      --no-build             Do not build the migration project");
         writer.WriteLine("      --dry-run              Show migration files, SQL, and final schema without changes");
         writer.WriteLine("      --version <number>     Version for a new migration");
+        writer.WriteLine();
+        writer.WriteLine("Generate options:");
+        writer.WriteLine("      --output-mode <mode>   intermediate (default), directory, or library");
+        writer.WriteLine("                             intermediate writes under the project obj directory");
+        writer.WriteLine("                             directory writes a durable directory you can check in");
+        writer.WriteLine("                             library writes a directory that compiles as its own project");
+        writer.WriteLine("  -o, --output <dir>         Output directory for directory and library modes");
+        writer.WriteLine("      --library-project <path> Existing destination csproj; it is never modified");
+        writer.WriteLine("      --library-name <name>  Name of the library project the tool writes");
+        writer.WriteLine("      --generated-namespace <ns> Namespace for generated code");
+        writer.WriteLine("      --provider <name>      Database provider when it is not set in the project");
+        writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
+        writer.WriteLine("      --verbose              Print the MSBuild command and its output");
     }
 }
 
