@@ -16,9 +16,13 @@
 
   <UsingTask TaskName="CobaltumOrm.Compiler.CobaltumOrmTransformTask"
              AssemblyFile="$(CobaltumOrmCompilerTaskAssembly)" />
+  <UsingTask TaskName="CobaltumOrm.Compiler.CobaltumOrmCollectTransformInputsTask"
+             AssemblyFile="$(CobaltumOrmCompilerTaskAssembly)" />
+  <UsingTask TaskName="CobaltumOrm.Compiler.CobaltumOrmReadTransformManifestTask"
+             AssemblyFile="$(CobaltumOrmCompilerTaskAssembly)" />
 
   <Target Name="CobaltumOrmConfigureAnalysisCache"
-          BeforeTargets="GenerateMSBuildEditorConfigFileCore;CobaltumOrmTransformSources">
+          BeforeTargets="GenerateMSBuildEditorConfigFileCore;CobaltumOrmCollectTransformInputs">
     <PropertyGroup>
       <CobaltumOrmIntermediateOutputPath Condition="'$(CobaltumOrmIntermediateOutputPath)' == ''">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'CobaltumOrm'))</CobaltumOrmIntermediateOutputPath>
       <_CobaltumOrmAnalysisCacheDirectory>$([MSBuild]::NormalizePath('$(CobaltumOrmIntermediateOutputPath)', 'AnalysisCache'))</_CobaltumOrmAnalysisCacheDirectory>
@@ -66,37 +70,87 @@
     </ItemGroup>
   </Target>
 
-  <Target Name="CobaltumOrmTransformSources"
-          BeforeTargets="CoreCompile"
+  <Target Name="CobaltumOrmCollectTransformInputs"
           DependsOnTargets="ResolveReferences;CobaltumOrmResolveMigrationProjectInputs;CobaltumOrmConfigureAnalysisCache"
           Condition="'$(CobaltumOrmCompileTimeQueries)' != 'false'">
     <PropertyGroup>
       <CobaltumOrmIntermediateOutputPath Condition="'$(CobaltumOrmIntermediateOutputPath)' == ''">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'CobaltumOrm'))</CobaltumOrmIntermediateOutputPath>
+      <CobaltumOrmTransformInputManifest>$([MSBuild]::NormalizePath('$(CobaltumOrmIntermediateOutputPath)', 'CobaltumOrm.TransformInputs.xml'))</CobaltumOrmTransformInputManifest>
+      <CobaltumOrmTransformSuccessManifest>$([MSBuild]::NormalizePath('$(CobaltumOrmIntermediateOutputPath)', 'CobaltumOrm.TransformSuccess.xml'))</CobaltumOrmTransformSuccessManifest>
     </PropertyGroup>
     <ItemGroup>
       <_CobaltumOrmInputSource Include="@(Compile)"
                                Condition="'%(Compile.Extension)' == '.cs' and '%(Compile.AutoGen)' != 'true' and '%(Compile.DesignTime)' != 'true' and '%(Compile.CobaltumOrmTransformed)' != 'true'" />
     </ItemGroup>
 
+    <CobaltumOrmCollectTransformInputsTask Sources="@(_CobaltumOrmInputSource)"
+                                           MigrationSources="@(_CobaltumOrmExternalMigrationSource)"
+                                           References="@(ReferencePath)"
+                                           AdditionalFiles="@(AdditionalFiles)"
+                                           InputManifestPath="$(CobaltumOrmTransformInputManifest)"
+                                           SuccessManifestPath="$(CobaltumOrmTransformSuccessManifest)"
+                                           OutputDirectory="$(CobaltumOrmIntermediateOutputPath)"
+                                           DefineConstants="$(DefineConstants)"
+                                           LangVersion="$(LangVersion)"
+                                           Nullable="$(Nullable)"
+                                           GeneratedNamespace="$(CobaltumOrmGeneratedNamespace)"
+                                           CobaltumOrmDatabaseProvider="$(CobaltumOrmDatabaseProvider)"
+                                           CobaltumOrmAnalysisCache="$(CobaltumOrmAnalysisCache)"
+                                           AnalysisCacheDirectory="$(_CobaltumOrmAnalysisCacheDirectory)"
+                                           CobaltumOrmCompileTimeQueries="$(CobaltumOrmCompileTimeQueries)"
+                                           ProjectPath="$(MSBuildProjectFullPath)"
+                                           TaskAssemblyPath="$(CobaltumOrmCompilerTaskAssembly)">
+      <Output TaskParameter="InputFiles" ItemName="_CobaltumOrmTransformInputFile" />
+      <Output TaskParameter="CachedOutputs" ItemName="_CobaltumOrmCachedTransformOutput" />
+    </CobaltumOrmCollectTransformInputsTask>
+
+    <ItemGroup>
+      <FileWrites Include="$(CobaltumOrmTransformInputManifest)" />
+      <FileWrites Include="@(_CobaltumOrmCachedTransformOutput)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CobaltumOrmRunTransform"
+          DependsOnTargets="CobaltumOrmCollectTransformInputs"
+          Inputs="$(CobaltumOrmTransformInputManifest);$(CobaltumOrmCompilerTaskAssembly)"
+          Outputs="$(CobaltumOrmTransformSuccessManifest)"
+          Condition="'$(CobaltumOrmCompileTimeQueries)' != 'false'">
+    <Delete Files="$(CobaltumOrmTransformSuccessManifest)" />
+
     <CobaltumOrmTransformTask Sources="@(_CobaltumOrmInputSource)"
                               MigrationSources="@(_CobaltumOrmExternalMigrationSource)"
                               References="@(ReferencePath)"
                               AdditionalFiles="@(AdditionalFiles)"
                               OutputDirectory="$(CobaltumOrmIntermediateOutputPath)"
+                              SuccessManifestPath="$(CobaltumOrmTransformSuccessManifest)"
                               DefineConstants="$(DefineConstants)"
                               LangVersion="$(LangVersion)"
                               Nullable="$(Nullable)"
                               GeneratedNamespace="$(CobaltumOrmGeneratedNamespace)"
                               CobaltumOrmDatabaseProvider="$(CobaltumOrmDatabaseProvider)"
                               AnalysisCacheDirectory="$(_CobaltumOrmAnalysisCacheDirectory)"
-                              AnalysisCacheEnabled="$(CobaltumOrmAnalysisCache)">
-      <Output TaskParameter="ProcessedSources" ItemName="_CobaltumOrmProcessedSource" />
-      <Output TaskParameter="TransformedSources" ItemName="_CobaltumOrmTransformedSource" />
-    </CobaltumOrmTransformTask>
+                              AnalysisCacheEnabled="$(CobaltumOrmAnalysisCache)" />
+  </Target>
+
+  <Target Name="CobaltumOrmRestoreTransformSources"
+          DependsOnTargets="CobaltumOrmRunTransform"
+          Condition="'$(CobaltumOrmCompileTimeQueries)' != 'false'">
+    <CobaltumOrmReadTransformManifestTask SuccessManifestPath="$(CobaltumOrmTransformSuccessManifest)">
+      <Output TaskParameter="ProcessedSources" ItemName="_CobaltumOrmManifestProcessedSource" />
+      <Output TaskParameter="TransformedSources" ItemName="_CobaltumOrmManifestTransformedSource" />
+      <Output TaskParameter="Outputs" ItemName="_CobaltumOrmManifestOutput" />
+    </CobaltumOrmReadTransformManifestTask>
 
     <ItemGroup>
-      <Compile Remove="@(_CobaltumOrmProcessedSource)" />
-      <Compile Include="@(_CobaltumOrmTransformedSource)" />
+      <Compile Remove="@(_CobaltumOrmManifestProcessedSource)" />
+      <Compile Include="@(_CobaltumOrmManifestTransformedSource)" />
+      <FileWrites Include="$(CobaltumOrmTransformSuccessManifest)" />
+      <FileWrites Include="@(_CobaltumOrmManifestOutput)" />
     </ItemGroup>
   </Target>
+
+  <Target Name="CobaltumOrmTransformSources"
+          BeforeTargets="CoreCompile"
+          DependsOnTargets="CobaltumOrmRestoreTransformSources"
+          Condition="'$(CobaltumOrmCompileTimeQueries)' != 'false'" />
 </Project>

@@ -170,6 +170,86 @@ public sealed class AnalysisCacheTests
     }
 
     [Fact]
+    public void SchemaEntriesWithSwappedKeysMissAndAreReplaced()
+    {
+        using var fixture = new CacheFixture();
+        var firstMigrations = Migrations((1, "first", "CREATE TABLE users (id bigint NOT NULL)"));
+        var secondMigrations = Migrations((2, "second", "ALTER TABLE users ADD COLUMN name text"));
+        var applications = 0;
+
+        void Run(IReadOnlyList<SemanticMigrationInput> migrations, out bool hit)
+        {
+            fixture.CreateCache(DatabaseProvider.PostgreSql).GetOrAnalyzeSchema(
+                migrations,
+                () =>
+                {
+                    applications++;
+                    return new CacheComputation<DatabaseSchema>(UserSchema(), true);
+                },
+                out hit);
+        }
+
+        Run(firstMigrations, out _);
+        Run(secondMigrations, out _);
+        SwapRootKeys(Directory.GetFiles(fixture.Directory, "schema-*.xml"));
+
+        Run(firstMigrations, out var firstSwappedHit);
+        Run(secondMigrations, out var secondSwappedHit);
+        Run(firstMigrations, out var firstRepairedHit);
+        Run(secondMigrations, out var secondRepairedHit);
+
+        Assert.False(firstSwappedHit);
+        Assert.False(secondSwappedHit);
+        Assert.True(firstRepairedHit);
+        Assert.True(secondRepairedHit);
+        Assert.Equal(4, applications);
+    }
+
+    [Fact]
+    public void QueryEntriesWithSwappedKeysMissAndAreReplaced()
+    {
+        using var fixture = new CacheFixture();
+        var schema = UserSchema();
+        var analyzer = new CountingQueryAnalyzer(SuccessfulQuery());
+        const string firstSql = "SELECT id FROM users";
+        const string secondSql = "SELECT name FROM users";
+
+        fixture.CreateCache(DatabaseProvider.PostgreSql).AnalyzeQuery(schema, firstSql, analyzer);
+        fixture.CreateCache(DatabaseProvider.PostgreSql).AnalyzeQuery(schema, secondSql, analyzer);
+        SwapRootKeys(Directory.GetFiles(fixture.Directory, "query-*.xml"));
+
+        var firstCache = fixture.CreateCache(DatabaseProvider.PostgreSql);
+        firstCache.AnalyzeQuery(schema, firstSql, analyzer, out var firstSwappedHit);
+        var secondCache = fixture.CreateCache(DatabaseProvider.PostgreSql);
+        secondCache.AnalyzeQuery(schema, secondSql, analyzer, out var secondSwappedHit);
+        fixture.CreateCache(DatabaseProvider.PostgreSql)
+            .AnalyzeQuery(schema, firstSql, analyzer, out var firstRepairedHit);
+        fixture.CreateCache(DatabaseProvider.PostgreSql)
+            .AnalyzeQuery(schema, secondSql, analyzer, out var secondRepairedHit);
+
+        Assert.False(firstSwappedHit);
+        Assert.False(secondSwappedHit);
+        Assert.True(firstRepairedHit);
+        Assert.True(secondRepairedHit);
+        Assert.Equal(4, analyzer.Calls);
+    }
+
+    [Fact]
+    public void MultipleQueriesCanonicalizeTheSameSchemaOncePerCacheInstance()
+    {
+        using var fixture = new CacheFixture();
+        var cache = fixture.CreateCache(DatabaseProvider.PostgreSql);
+        var schema = UserSchema();
+        var analyzer = new CountingQueryAnalyzer(SuccessfulQuery());
+
+        cache.AnalyzeQuery(schema, "SELECT id FROM users", analyzer);
+        cache.AnalyzeQuery(schema, "SELECT name FROM users", analyzer);
+
+        Assert.Equal(1, cache.SchemaCanonicalizationCount);
+        Assert.Equal(2, analyzer.Calls);
+    }
+
+    [Fact]
     public void ErrorResultsAreNotCached()
     {
         using var fixture = new CacheFixture();
@@ -296,6 +376,22 @@ public sealed class AnalysisCacheTests
 
     private static string ParameterValue(QueryParameter parameter) =>
         parameter.Name + "\0" + parameter.ClrType + "\0" + parameter.DatabaseTypeName;
+
+    private static void SwapRootKeys(string[] paths)
+    {
+        Assert.Equal(2, paths.Length);
+        var first = XDocument.Load(paths[0]);
+        var second = XDocument.Load(paths[1]);
+        var firstKey = (string?)first.Root!.Attribute("key");
+        var secondKey = (string?)second.Root!.Attribute("key");
+        Assert.False(string.IsNullOrEmpty(firstKey));
+        Assert.False(string.IsNullOrEmpty(secondKey));
+        Assert.NotEqual(firstKey, secondKey);
+        first.Root.SetAttributeValue("key", secondKey);
+        second.Root.SetAttributeValue("key", firstKey);
+        first.Save(paths[0]);
+        second.Save(paths[1]);
+    }
 
     private static void AssertSchemasEqual(DatabaseSchema expected, DatabaseSchema actual)
     {

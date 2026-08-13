@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
@@ -44,6 +45,7 @@ internal readonly struct CacheComputation<T>
 /// </summary>
 internal sealed class AnalysisCache
 {
+    // Bump AnalysisVersion whenever parser, binder, type-mapping, or schema semantics change.
     private const string FormatVersion = "1";
     private const string AnalysisVersion = "1";
     private const long MaxDocumentCharacters = 16L * 1024L * 1024L;
@@ -55,6 +57,10 @@ internal sealed class AnalysisCache
     private readonly string? _directory;
     private readonly string _provider;
     private readonly bool _enabled;
+    private readonly object _schemaComponentsLock = new object();
+    private readonly ConditionalWeakTable<DatabaseSchema, CanonicalSchemaComponent> _schemaComponents =
+        new ConditionalWeakTable<DatabaseSchema, CanonicalSchemaComponent>();
+    private int _schemaCanonicalizationCount;
 
     internal AnalysisCache(string? directory, DatabaseProvider provider, bool enabled)
     {
@@ -62,6 +68,8 @@ internal sealed class AnalysisCache
         _provider = provider.ToString();
         _enabled = enabled && _directory != null;
     }
+
+    internal int SchemaCanonicalizationCount => _schemaCanonicalizationCount;
 
     internal DatabaseSchema GetOrAnalyzeSchema(
         IReadOnlyList<SemanticMigrationInput> migrations,
@@ -80,16 +88,19 @@ internal sealed class AnalysisCache
 
         cacheHit = false;
         string? path = null;
-        if (_enabled && TrySchemaPath(migrations, out path) && TryReadSchema(path!, out var cached))
+        string? key = null;
+        if (_enabled &&
+            TrySchemaPath(migrations, out path, out key) &&
+            TryReadSchema(path!, key!, out var cached))
         {
             cacheHit = true;
             return cached!;
         }
 
         var computation = analyze();
-        if (_enabled && computation.IsSuccessful && path != null)
+        if (_enabled && computation.IsSuccessful && path != null && key != null)
         {
-            TryWriteSchema(path, computation.Value);
+            TryWriteSchema(path, key, computation.Value);
         }
 
         return computation.Value;
@@ -118,16 +129,19 @@ internal sealed class AnalysisCache
 
         cacheHit = false;
         string? path = null;
-        if (_enabled && TryQueryPath(schema, sql, out path) && TryReadQuery(path!, out var cached))
+        string? key = null;
+        if (_enabled &&
+            TryQueryPath(schema, sql, out path, out key) &&
+            TryReadQuery(path!, key!, out var cached))
         {
             cacheHit = true;
             return cached!;
         }
 
         var result = analyzer.Analyze(schema, sql);
-        if (_enabled && !result.HasErrors && path != null)
+        if (_enabled && !result.HasErrors && path != null && key != null)
         {
-            TryWriteQuery(path, result);
+            TryWriteQuery(path, key, result);
         }
 
         return result;
@@ -136,11 +150,14 @@ internal sealed class AnalysisCache
     internal AnalysisResult AnalyzeQuery(DatabaseSchema schema, string sql, IQueryAnalyzer analyzer) =>
         AnalyzeQuery(schema, sql, analyzer, out _);
 
-    private bool TrySchemaPath(IReadOnlyList<SemanticMigrationInput> migrations, out string? path)
+    private bool TrySchemaPath(
+        IReadOnlyList<SemanticMigrationInput> migrations,
+        out string? path,
+        out string? key)
     {
         try
         {
-            var key = CreateKey(writer =>
+            key = CreateKey(writer =>
             {
                 WriteKeyHeader(writer, "schema");
                 writer.Write(migrations.Count);
@@ -161,38 +178,24 @@ internal sealed class AnalysisCache
         catch (Exception)
         {
             path = null;
+            key = null;
             return false;
         }
     }
 
-    private bool TryQueryPath(DatabaseSchema schema, string sql, out string? path)
+    private bool TryQueryPath(
+        DatabaseSchema schema,
+        string sql,
+        out string? path,
+        out string? key)
     {
         try
         {
-            var key = CreateKey(writer =>
+            var schemaComponent = GetCanonicalSchemaComponent(schema);
+            key = CreateKey(writer =>
             {
                 WriteKeyHeader(writer, "query");
-                var tables = schema.Tables
-                    .OrderBy(table => table.Schema ?? string.Empty, StringComparer.Ordinal)
-                    .ThenBy(table => table.Name, StringComparer.Ordinal)
-                    .ToArray();
-                writer.Write(tables.Length);
-                foreach (var table in tables)
-                {
-                    WriteNullableKeyString(writer, table.Schema);
-                    WriteKeyString(writer, table.Name);
-                    writer.Write(table.Columns.Count);
-                    foreach (var column in table.Columns)
-                    {
-                        WriteKeyString(writer, column.Name);
-                        WriteKeyString(writer, column.SqlType);
-                        writer.Write(column.IsNullable);
-                        writer.Write(column.IsPrimaryKey);
-                        WriteNullableKeyString(writer, column.DefaultExpression);
-                        writer.Write(column.IsIdentity);
-                    }
-                }
-
+                WriteKeyString(writer, schemaComponent.Key);
                 WriteKeyString(writer, sql);
             });
             path = Path.Combine(_directory!, "query-" + key + ".xml");
@@ -201,8 +204,52 @@ internal sealed class AnalysisCache
         catch (Exception)
         {
             path = null;
+            key = null;
             return false;
         }
+    }
+
+    private CanonicalSchemaComponent GetCanonicalSchemaComponent(DatabaseSchema schema)
+    {
+        lock (_schemaComponentsLock)
+        {
+            if (_schemaComponents.TryGetValue(schema, out var component))
+            {
+                return component;
+            }
+
+            component = new CanonicalSchemaComponent(CreateCanonicalSchemaKey(schema));
+            _schemaComponents.Add(schema, component);
+            _schemaCanonicalizationCount++;
+            return component;
+        }
+    }
+
+    private static string CreateCanonicalSchemaKey(DatabaseSchema schema)
+    {
+        return CreateKey(writer =>
+        {
+            var tables = schema.Tables
+                .OrderBy(table => table.Schema ?? string.Empty, StringComparer.Ordinal)
+                .ThenBy(table => table.Name, StringComparer.Ordinal)
+                .ToArray();
+            writer.Write(tables.Length);
+            foreach (var table in tables)
+            {
+                WriteNullableKeyString(writer, table.Schema);
+                WriteKeyString(writer, table.Name);
+                writer.Write(table.Columns.Count);
+                foreach (var column in table.Columns)
+                {
+                    WriteKeyString(writer, column.Name);
+                    WriteKeyString(writer, column.SqlType);
+                    writer.Write(column.IsNullable);
+                    writer.Write(column.IsPrimaryKey);
+                    WriteNullableKeyString(writer, column.DefaultExpression);
+                    writer.Write(column.IsIdentity);
+                }
+            }
+        });
     }
 
     private void WriteKeyHeader(BinaryWriter writer, string kind)
@@ -213,7 +260,7 @@ internal sealed class AnalysisCache
         WriteKeyString(writer, _provider);
     }
 
-    // SHA-256 is used only to turn semantic cache inputs into a bounded lookup file name.
+    // SHA-256 is used only to turn semantic cache inputs into a bounded product cache lookup key.
     private static string CreateKey(Action<BinaryWriter> write)
     {
         using (var stream = new MemoryStream())
@@ -252,12 +299,12 @@ internal sealed class AnalysisCache
         }
     }
 
-    private bool TryReadSchema(string path, out DatabaseSchema? schema)
+    private bool TryReadSchema(string path, string key, out DatabaseSchema? schema)
     {
         schema = null;
         try
         {
-            var root = LoadAndValidateRoot(path, "schema");
+            var root = LoadAndValidateRoot(path, "schema", key);
             if (root == null || root.Elements().Count() != 1 || HasNonWhitespaceText(root))
             {
                 return false;
@@ -340,12 +387,12 @@ internal sealed class AnalysisCache
         }
     }
 
-    private bool TryReadQuery(string path, out AnalysisResult? result)
+    private bool TryReadQuery(string path, string key, out AnalysisResult? result)
     {
         result = null;
         try
         {
-            var root = LoadAndValidateRoot(path, "query");
+            var root = LoadAndValidateRoot(path, "query", key);
             if (root == null || HasNonWhitespaceText(root))
             {
                 return false;
@@ -407,7 +454,7 @@ internal sealed class AnalysisCache
         }
     }
 
-    private XElement? LoadAndValidateRoot(string path, string kind)
+    private XElement? LoadAndValidateRoot(string path, string kind, string expectedKey)
     {
         if (!File.Exists(path) || new FileInfo(path).Length > MaxDocumentCharacters)
         {
@@ -426,11 +473,12 @@ internal sealed class AnalysisCache
             var document = XDocument.Load(reader, LoadOptions.None);
             var root = document.Root;
             if (root == null || root.Name != "cobaltum-analysis-cache" ||
-                !HasOnlyAttributes(root, "kind", "format", "analysis", "provider") ||
+                !HasOnlyAttributes(root, "kind", "format", "analysis", "provider", "key") ||
                 !string.Equals((string?)root.Attribute("kind"), kind, StringComparison.Ordinal) ||
                 !string.Equals((string?)root.Attribute("format"), FormatVersion, StringComparison.Ordinal) ||
                 !string.Equals((string?)root.Attribute("analysis"), AnalysisVersion, StringComparison.Ordinal) ||
-                !string.Equals((string?)root.Attribute("provider"), _provider, StringComparison.Ordinal))
+                !string.Equals((string?)root.Attribute("provider"), _provider, StringComparison.Ordinal) ||
+                !string.Equals((string?)root.Attribute("key"), expectedKey, StringComparison.Ordinal))
             {
                 return null;
             }
@@ -439,7 +487,7 @@ internal sealed class AnalysisCache
         }
     }
 
-    private void TryWriteSchema(string path, DatabaseSchema schema)
+    private void TryWriteSchema(string path, string key, DatabaseSchema schema)
     {
         if (schema.Tables.Count > MaxTables || schema.Tables.Sum(table => (long)table.Columns.Count) > MaxColumns ||
             !CanSerializeSchema(schema))
@@ -449,7 +497,7 @@ internal sealed class AnalysisCache
 
         TryPublish(path, writer =>
         {
-            WriteRootStart(writer, "schema");
+            WriteRootStart(writer, "schema", key);
             writer.WriteStartElement("schema");
             foreach (var table in schema.Tables)
             {
@@ -476,7 +524,7 @@ internal sealed class AnalysisCache
         });
     }
 
-    private void TryWriteQuery(string path, AnalysisResult result)
+    private void TryWriteQuery(string path, string key, AnalysisResult result)
     {
         if (result.Columns.Count > MaxColumns || result.Parameters.Count > MaxParameters ||
             result.Columns.Any(column => !CanSerialize(column.Name) || !CanSerialize(column.ClrType)) ||
@@ -488,7 +536,7 @@ internal sealed class AnalysisCache
 
         TryPublish(path, writer =>
         {
-            WriteRootStart(writer, "query");
+            WriteRootStart(writer, "query", key);
             writer.WriteStartElement("columns");
             foreach (var column in result.Columns)
             {
@@ -514,7 +562,7 @@ internal sealed class AnalysisCache
         });
     }
 
-    private void WriteRootStart(XmlWriter writer, string kind)
+    private void WriteRootStart(XmlWriter writer, string kind, string key)
     {
         writer.WriteStartDocument();
         writer.WriteStartElement("cobaltum-analysis-cache");
@@ -522,6 +570,7 @@ internal sealed class AnalysisCache
         writer.WriteAttributeString("format", FormatVersion);
         writer.WriteAttributeString("analysis", AnalysisVersion);
         writer.WriteAttributeString("provider", _provider);
+        writer.WriteAttributeString("key", key);
     }
 
     private static void WriteOptionalAttribute(XmlWriter writer, string name, string? value)
@@ -654,6 +703,16 @@ internal sealed class AnalysisCache
 
         value = false;
         return false;
+    }
+
+    private sealed class CanonicalSchemaComponent
+    {
+        internal CanonicalSchemaComponent(string key)
+        {
+            Key = key;
+        }
+
+        internal string Key { get; }
     }
 }
 
