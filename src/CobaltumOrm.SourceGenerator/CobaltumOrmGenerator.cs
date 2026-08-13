@@ -129,6 +129,21 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
 
             if (!analysis.HasErrors)
             {
+                if (query.ResultType != null &&
+                    !ResultMappingFactory.TryCreate(
+                        compilation,
+                        query.ResultType,
+                        analysis,
+                        out _,
+                        out var mappingError))
+                {
+                    Report(RoslynDiagnostic.Create(
+                        GeneratorDiagnostics.ResultMapping,
+                        query.Location,
+                        mappingError));
+                    continue;
+                }
+
                 validQueries.Add(query);
                 queryAnalyses.Add(analysis);
             }
@@ -486,10 +501,7 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                 }
 
                 var attributes = owner.GetAttributes().Where(attribute =>
-                    string.Equals(
-                        attribute.AttributeClass?.ToDisplayString(),
-                        "CobaltumOrm.QueryAttribute",
-                        StringComparison.Ordinal)).ToList();
+                    IsQueryAttribute(attribute.AttributeClass)).ToList();
                 if (attributes.Count == 0)
                 {
                     continue;
@@ -525,7 +537,10 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                         continue;
                     }
 
-                    candidates.Add(new QuerySource(owner, name, sql, location));
+                    var resultType = attribute.AttributeClass?.Arity == 1
+                        ? attribute.AttributeClass.TypeArguments[0]
+                        : null;
+                    candidates.Add(new QuerySource(owner, name, sql, location, resultType));
                 }
 
                 var existingNames = new HashSet<string>(owner.GetMembers().Select(member => member.Name), StringComparer.Ordinal);
@@ -533,7 +548,9 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                 foreach (var candidate in candidates)
                 {
                     var baseName = CSharpNames.Pascal(candidate.Name, "Query");
-                    var names = new[] { baseName, baseName + "Async", baseName + "Result", baseName + "Parameters" };
+                    var names = candidate.ResultType == null
+                        ? new[] { baseName, baseName + "Async", baseName + "Result", baseName + "Parameters" }
+                        : new[] { baseName, baseName + "Async", baseName + "Parameters" };
                     var collision = names.FirstOrDefault(name => existingNames.Contains(name) || generatedNames.ContainsKey(name));
                     if (collision != null)
                     {
@@ -557,6 +574,19 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
         return queries;
     }
 
+    private static bool IsQueryAttribute(INamedTypeSymbol? attributeType)
+    {
+        if (attributeType == null ||
+            attributeType.ContainingNamespace.ToDisplayString() != "CobaltumOrm")
+        {
+            return false;
+        }
+
+        var definition = attributeType.OriginalDefinition;
+        return definition.MetadataName == "QueryAttribute" ||
+            definition.MetadataName == "QueryAttribute`1";
+    }
+
     private static void ValidateRawQueries(
         Compilation compilation,
         DatabaseSchema schema,
@@ -577,6 +607,8 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                 {
                     continue;
                 }
+
+                var explicitResultType = ResultTypeArgument(semanticModel, operation!, invocation);
 
                 var sqlArgument = operation!.Arguments.FirstOrDefault(argument =>
                     argument.Parameter?.Name == "sql" &&
@@ -645,6 +677,27 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                             diagnostic.Code,
                             diagnostic.Message));
                     }
+
+                    if (!analysis.HasErrors && explicitResultType != null && analysis.Columns.Count == 0)
+                    {
+                        report(RoslynDiagnostic.Create(
+                            GeneratorDiagnostics.ResultMapping,
+                            expression.GetLocation(),
+                            "Query<TResult> requires a statement that returns rows"));
+                    }
+                    else if (!analysis.HasErrors && explicitResultType != null &&
+                             !ResultMappingFactory.TryCreate(
+                                 compilation,
+                                 explicitResultType,
+                                 analysis,
+                                 out _,
+                                 out var mappingError))
+                    {
+                        report(RoslynDiagnostic.Create(
+                            GeneratorDiagnostics.ResultMapping,
+                            expression.GetLocation(),
+                            mappingError));
+                    }
                 }
 
                 if (!hasStatement)
@@ -657,6 +710,35 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                 }
             }
         }
+    }
+
+    private static ITypeSymbol? ResultTypeArgument(
+        SemanticModel semanticModel,
+        IInvocationOperation operation,
+        InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+            memberAccess.Name is GenericNameSyntax genericName &&
+            genericName.TypeArgumentList.Arguments.Count == 1)
+        {
+            return semanticModel.GetTypeInfo(genericName.TypeArgumentList.Arguments[0]).Type;
+        }
+
+        if (invocation.Expression is GenericNameSyntax directGenericName &&
+            directGenericName.TypeArgumentList.Arguments.Count == 1)
+        {
+            return semanticModel.GetTypeInfo(directGenericName.TypeArgumentList.Arguments[0]).Type;
+        }
+
+        var method = operation.TargetMethod;
+        if (method.TypeArguments.Length == 1)
+        {
+            return method.TypeArguments[0];
+        }
+
+        return method.ReducedFrom?.TypeArguments.Length == 1
+            ? method.ReducedFrom.TypeArguments[0]
+            : null;
     }
 
     private static string GetGeneratedNamespace(Microsoft.CodeAnalysis.Diagnostics.AnalyzerConfigOptionsProvider options)

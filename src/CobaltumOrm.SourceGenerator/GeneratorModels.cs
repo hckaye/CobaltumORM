@@ -67,18 +67,25 @@ internal sealed class MigrationStep
 
 internal sealed class QuerySource
 {
-    internal QuerySource(INamedTypeSymbol owner, string name, string sql, Location location)
+    internal QuerySource(
+        INamedTypeSymbol owner,
+        string name,
+        string sql,
+        Location location,
+        ITypeSymbol? resultType)
     {
         Owner = owner;
         Name = name;
         Sql = sql;
         Location = location;
+        ResultType = resultType;
     }
 
     internal INamedTypeSymbol Owner { get; }
     internal string Name { get; }
     internal string Sql { get; }
     internal Location Location { get; }
+    internal ITypeSymbol? ResultType { get; }
 }
 
 internal sealed class RawQuerySource

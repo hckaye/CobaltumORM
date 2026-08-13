@@ -289,6 +289,34 @@ public sealed class CobaltumRawQuery
         }
     }
 
+    internal async Task<IReadOnlyList<TResult>> ReadMappedAsync<TResult>(
+        Func<DbDataReader, TResult> materialize,
+        CancellationToken cancellationToken)
+    {
+        var closeWhenFinished = await CobaltumConnection.OpenIfNeededAsync(
+            _connection,
+            _transaction,
+            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using (var command = BuildCommand())
+            using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var rows = new List<TResult>();
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    rows.Add(materialize(reader));
+                }
+
+                return rows.AsReadOnly();
+            }
+        }
+        finally
+        {
+            CobaltumConnection.CloseIfOpened(_connection, closeWhenFinished);
+        }
+    }
+
     private DbCommand BuildCommand()
     {
         var command = _connection.CreateCommand();
@@ -332,6 +360,44 @@ public sealed class CobaltumRawQuery
             throw;
         }
     }
+}
+
+/// <summary>A raw SQL command that maps each returned row to a caller-supplied result type.</summary>
+public sealed class MappedQuery<TResult>
+{
+    private readonly CobaltumRawQuery _query;
+    private readonly Func<DbDataReader, TResult> _materialize;
+
+    internal MappedQuery(CobaltumRawQuery query, Func<DbDataReader, TResult> materialize)
+    {
+        _query = query ?? throw new ArgumentNullException(nameof(query));
+        _materialize = materialize ?? throw new ArgumentNullException(nameof(materialize));
+    }
+
+    /// <summary>Gets the SQL supplied by the caller.</summary>
+    public string Sql => _query.Sql;
+
+    /// <summary>Returns a new query with one provider parameter.</summary>
+    public MappedQuery<TResult> WithParameter(string name, object? value, DbType? dbType = null) =>
+        new MappedQuery<TResult>(_query.WithParameter(name, value, dbType), _materialize);
+
+    /// <summary>Returns a new query with provider-specific parameter configuration.</summary>
+    public MappedQuery<TResult> WithConfiguredParameter(
+        string name,
+        object? value,
+        DbType dbType,
+        Action<DbParameter> configureParameter) =>
+        new MappedQuery<TResult>(
+            _query.WithConfiguredParameter(name, value, dbType, configureParameter),
+            _materialize);
+
+    /// <summary>Executes the SQL as a provider-neutral non-query command.</summary>
+    public Task<int> ExecuteAsync(CancellationToken cancellationToken = default) =>
+        _query.ExecuteAsync(cancellationToken);
+
+    /// <summary>Executes the SQL and maps every row to <typeparamref name="TResult"/>.</summary>
+    public Task<IReadOnlyList<TResult>> ReadAsync(CancellationToken cancellationToken = default) =>
+        _query.ReadMappedAsync(_materialize, cancellationToken);
 }
 
 internal sealed class CobaltumRawParameter
@@ -722,12 +788,45 @@ public static class CobaltumQueryExtensions
     }
 
     /// <summary>
+    /// Creates a checked query whose rows are mapped to <typeparamref name="TResult"/>.
+    /// The build validates the SQL result shape and replaces this call with generated mapping code.
+    /// </summary>
+    public static MappedQuery<TResult> Query<TResult>(
+        this DbConnection connection,
+        [System.Diagnostics.CodeAnalysis.StringSyntax("sql")] string sql,
+        DbTransaction? transaction = null) =>
+        throw new NotSupportedException(
+            "Query<TResult> requires CobaltumORM compile-time query transformation.");
+
+    /// <summary>
     /// Creates an explicitly untyped command without CobaltumORM compile-time SQL validation.
     /// </summary>
     public static CobaltumRawQuery NoCheckQuery(
         this DbConnection connection,
         [System.Diagnostics.CodeAnalysis.StringSyntax("sql")] string sql,
         DbTransaction? transaction = null) => Query(connection, sql, transaction);
+
+    /// <summary>
+    /// Creates a query without compile-time SQL validation and maps returned rows to
+    /// <typeparamref name="TResult"/> at runtime.
+    /// </summary>
+    public static MappedQuery<TResult> NoCheckQuery<TResult>(
+        this DbConnection connection,
+        [System.Diagnostics.CodeAnalysis.StringSyntax("sql")] string sql,
+        DbTransaction? transaction = null) =>
+        throw new NotSupportedException(
+            "NoCheckQuery<TResult> requires CobaltumORM compile-time query transformation.");
+
+    /// <summary>Creates a mapped unchecked query. This method is intended for transformed source.</summary>
+    [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+    public static MappedQuery<TResult> NoCheckQueryMapped<TResult>(
+        this DbConnection connection,
+        string sql,
+        Func<DbDataReader, TResult> materialize,
+        DbTransaction? transaction = null) =>
+        new MappedQuery<TResult>(
+            NoCheckQuery(connection, sql, transaction),
+            materialize);
 
     /// <summary>
     /// Creates an explicitly untyped command for genuinely dynamic SQL.

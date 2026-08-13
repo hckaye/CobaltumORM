@@ -242,10 +242,19 @@ public sealed class CobaltumOrmTransformTask : Task
                 var operation = semanticModel.GetOperation(invocation) as IInvocationOperation;
                 var method = operation?.TargetMethod;
                 var original = method?.ReducedFrom ?? method;
-                if (original is null || original.Name != "Query" ||
+                if (original is null ||
                     original.ContainingType?.ToDisplayString() != "CobaltumOrm.CobaltumQueryExtensions" ||
                     original.Parameters.Length < 2 ||
                     original.Parameters[1].Type.SpecialType != SpecialType.System_String)
+                {
+                    continue;
+                }
+
+                var isCheckedQuery = original.Name == "Query";
+                var invocationResultType = ResultTypeArgument(semanticModel, operation!, invocation);
+                var isUncheckedTypedQuery = original.Name == "NoCheckQuery" &&
+                    invocationResultType != null;
+                if (!isCheckedQuery && !isUncheckedTypedQuery)
                 {
                     continue;
                 }
@@ -257,6 +266,45 @@ public sealed class CobaltumOrmTransformTask : Task
                 }
 
                 var sqlExpression = (ExpressionSyntax)sqlArgument.Value.Syntax;
+                if (isUncheckedTypedQuery)
+                {
+                    var uncheckedConnection = ConnectionExpression(invocation, operation);
+                    if (uncheckedConnection == null)
+                    {
+                        LogSourceError("COB105", "The NoCheckQuery connection expression could not be resolved.", invocation.GetLocation());
+                        continue;
+                    }
+
+                    var uncheckedResultType = invocationResultType!;
+                    if (!ResultMappingFactory.TryCreateUnchecked(
+                            compilation,
+                            uncheckedResultType,
+                            out var uncheckedMapping,
+                            out var uncheckedMappingError))
+                    {
+                        LogSourceError(
+                            "COB109",
+                            "NoCheckQuery result cannot be mapped to the specified type: " + uncheckedMappingError,
+                            invocation.GetLocation());
+                        continue;
+                    }
+
+                    var uncheckedTransaction = operation.Arguments.FirstOrDefault(argument =>
+                        argument.Parameter?.Name == "transaction" && !argument.IsImplicit)?.Value.Syntax as ExpressionSyntax;
+                    pending.Add(new PendingQuery(
+                        invocation,
+                        uncheckedConnection,
+                        uncheckedTransaction,
+                        string.Empty,
+                        null,
+                        Array.Empty<InterpolationHole>(),
+                        uncheckedResultType,
+                        null,
+                        sqlExpression,
+                        uncheckedMapping));
+                    continue;
+                }
+
                 var holes = new List<InterpolationHole>();
                 string? sql;
                 if (sqlExpression is InterpolatedStringExpressionSyntax interpolated)
@@ -334,6 +382,15 @@ public sealed class CobaltumOrmTransformTask : Task
                     .ToArray();
                 if (rowReturningStatements.Length == 0)
                 {
+                    if (invocationResultType != null)
+                    {
+                        LogSourceError(
+                            "COB109",
+                            "Query<TResult> requires a statement that returns rows.",
+                            invocation.GetLocation());
+                        continue;
+                    }
+
                     if (holes.Count != 0)
                     {
                         LogSourceError(
@@ -363,6 +420,23 @@ public sealed class CobaltumOrmTransformTask : Task
                         LogSourceError(diagnostic.Code, diagnostic.Message, sqlExpression.GetLocation());
                     }
 
+                    continue;
+                }
+
+                var explicitResultType = invocationResultType;
+                ResultMapping? resultMapping = null;
+                if (explicitResultType != null &&
+                    !ResultMappingFactory.TryCreate(
+                        compilation,
+                        explicitResultType,
+                        analysis,
+                        out resultMapping,
+                        out var mappingError))
+                {
+                    LogSourceError(
+                        "COB109",
+                        "Query result cannot be mapped to the specified type: " + mappingError,
+                        invocation.GetLocation());
                     continue;
                 }
 
@@ -424,7 +498,11 @@ public sealed class CobaltumOrmTransformTask : Task
                     transaction,
                     rowReturningSql,
                     analysis,
-                    holes));
+                    holes,
+                    explicitResultType,
+                    resultMapping,
+                    null,
+                    null));
             }
         }
 
@@ -459,7 +537,7 @@ public sealed class CobaltumOrmTransformTask : Task
             var operation = semanticModel.GetOperation(invocation) as IInvocationOperation;
             if (memberAccess.Name.Identifier.ValueText != "WithParameter" ||
                 operation?.TargetMethod.Name != "WithParameter" ||
-                operation.TargetMethod.ContainingType?.ToDisplayString() != "CobaltumOrm.CobaltumRawQuery")
+                !IsRawQueryType(operation.TargetMethod.ContainingType))
             {
                 break;
             }
@@ -504,6 +582,52 @@ public sealed class CobaltumOrmTransformTask : Task
         }
 
         return valid;
+    }
+
+    private static bool IsRawQueryType(INamedTypeSymbol? type)
+    {
+        if (type == null || type.ContainingNamespace.ToDisplayString() != "CobaltumOrm")
+        {
+            return false;
+        }
+
+        var metadataName = type.OriginalDefinition.MetadataName;
+        return metadataName == "CobaltumRawQuery" || metadataName == "MappedQuery`1";
+    }
+
+    private static ITypeSymbol? ResultTypeArgument(
+        SemanticModel semanticModel,
+        IInvocationOperation operation,
+        InvocationExpressionSyntax invocation)
+    {
+        if (invocation.Expression is MemberAccessExpressionSyntax memberAccess &&
+            memberAccess.Name is GenericNameSyntax genericName &&
+            genericName.TypeArgumentList.Arguments.Count == 1)
+        {
+            return semanticModel.GetTypeInfo(genericName.TypeArgumentList.Arguments[0]).Type;
+        }
+
+        if (invocation.Expression is GenericNameSyntax directGenericName &&
+            directGenericName.TypeArgumentList.Arguments.Count == 1)
+        {
+            return semanticModel.GetTypeInfo(directGenericName.TypeArgumentList.Arguments[0]).Type;
+        }
+
+        var method = operation.TargetMethod;
+        if (method.TypeArguments.Length == 1)
+        {
+            return method.TypeArguments[0];
+        }
+
+        var reducedType = method.ReducedFrom?.TypeArguments.Length == 1
+            ? method.ReducedFrom.TypeArguments[0]
+            : null;
+        if (reducedType != null)
+        {
+            return reducedType;
+        }
+
+        return null;
     }
 
     private bool TryBuildInterpolatedSql(
@@ -663,6 +787,18 @@ public sealed class CobaltumOrmTransformTask : Task
 
     private static ExpressionSyntax CreateReplacement(QueryCandidate candidate, string generatedClassName)
     {
+        if (candidate.UncheckedSqlExpression != null)
+        {
+            return SyntaxFactory.ParseExpression(
+                    "global::CobaltumOrm.CobaltumQueryExtensions.NoCheckQueryMapped(" +
+                    candidate.Connection.WithoutTrivia().ToFullString() + ", " +
+                    candidate.UncheckedSqlExpression.WithoutTrivia().ToFullString() + ", " +
+                    "global::" + generatedClassName + ".Materialize" +
+                    candidate.Index.ToString("D4", CultureInfo.InvariantCulture) + ", " +
+                    (candidate.Transaction?.WithoutTrivia().ToFullString() ?? "null") + ")")
+                .WithTriviaFrom(candidate.Invocation);
+        }
+
         var arguments = new List<string>
         {
             candidate.Connection.WithoutTrivia().ToFullString(),
@@ -671,7 +807,7 @@ public sealed class CobaltumOrmTransformTask : Task
             candidate.Transaction?.WithoutTrivia().ToFullString() ?? "null",
         };
         var holeNames = new HashSet<string>(candidate.Holes.Select(hole => hole.ParameterName), StringComparer.OrdinalIgnoreCase);
-        foreach (var parameter in candidate.Analysis.Parameters.Where(parameter => !holeNames.Contains(parameter.Name)))
+        foreach (var parameter in candidate.Analysis!.Parameters.Where(parameter => !holeNames.Contains(parameter.Name)))
         {
             var environment = candidate.TypeEnvironment;
             var databaseTypeName = candidate.UseDatabaseTypeNames ? parameter.DatabaseTypeName : null;
@@ -719,19 +855,43 @@ public sealed class CobaltumOrmTransformTask : Task
         foreach (var candidate in candidates)
         {
             var suffix = candidate.Index.ToString("D4", CultureInfo.InvariantCulture);
-            var resultName = "Query" + suffix + "Result";
-            var propertyNames = CSharpNames.Allocate(
-                candidate.Analysis.Columns,
-                column => CSharpNames.Pascal(column.Name, "Column"));
-            builder.Append("    internal sealed record ").Append(resultName).AppendLine("(");
-            for (var index = 0; index < candidate.Analysis.Columns.Count; index++)
+            if (candidate.UncheckedResultMapping != null)
             {
-                var column = candidate.Analysis.Columns[index];
-                builder.Append("        ").Append(environment.TypeName(column.ClrType)).Append(' ').Append(propertyNames[column]);
-                builder.AppendLine(index == candidate.Analysis.Columns.Count - 1 ? ");" : ",");
+                var uncheckedMapping = candidate.UncheckedResultMapping;
+                builder.Append("    internal static ")
+                    .Append(ResultMappingFactory.Display(uncheckedMapping.ResultType))
+                    .Append(" Materialize").Append(suffix)
+                    .AppendLine("(global::System.Data.Common.DbDataReader reader)");
+                builder.AppendLine("    {");
+                builder.Append("        return ")
+                    .Append(ResultMappingFactory.MaterializeUncheckedExpression(
+                        uncheckedMapping,
+                        "NoCheckQuery<" + uncheckedMapping.ResultType.ToDisplayString() + ">"))
+                    .AppendLine(";");
+                builder.AppendLine("    }");
+                builder.AppendLine();
+                continue;
             }
 
-            builder.AppendLine();
+            var analysis = candidate.Analysis!;
+            var resultName = candidate.ExplicitResultType == null
+                ? "Query" + suffix + "Result"
+                : ResultMappingFactory.Display(candidate.ExplicitResultType);
+            var propertyNames = CSharpNames.Allocate(
+                analysis.Columns,
+                column => CSharpNames.Pascal(column.Name, "Column"));
+            if (candidate.ExplicitResultType == null)
+            {
+                builder.Append("    internal sealed record ").Append(resultName).AppendLine("(");
+                for (var index = 0; index < analysis.Columns.Count; index++)
+                {
+                    var column = analysis.Columns[index];
+                    builder.Append("        ").Append(environment.TypeName(column.ClrType)).Append(' ').Append(propertyNames[column]);
+                    builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
+                }
+
+                builder.AppendLine();
+            }
             builder.Append("    internal static global::CobaltumOrm.CobaltumQueryDefinition<")
                 .Append(resultName).Append("> CreateQuery").Append(suffix).Append('(');
             for (var index = 0; index < candidate.Holes.Count; index++)
@@ -771,15 +931,27 @@ public sealed class CobaltumOrmTransformTask : Task
             builder.AppendLine("            },");
             builder.AppendLine("            static reader =>");
             builder.AppendLine("            {");
-            builder.Append("                return new ").Append(resultName).AppendLine("(");
-            for (var index = 0; index < candidate.Analysis.Columns.Count; index++)
+            if (candidate.ResultMapping == null)
             {
-                var column = candidate.Analysis.Columns[index];
-                builder.Append("                    ").Append(environment.ReadExpression(
-                    column.ClrType,
-                    index,
-                    "raw query." + column.Name));
-                builder.AppendLine(index == candidate.Analysis.Columns.Count - 1 ? ");" : ",");
+                builder.Append("                return new ").Append(resultName).AppendLine("(");
+                for (var index = 0; index < analysis.Columns.Count; index++)
+                {
+                    var column = analysis.Columns[index];
+                    builder.Append("                    ").Append(environment.ReadExpression(
+                        column.ClrType,
+                        index,
+                        "raw query." + column.Name));
+                    builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
+                }
+            }
+            else
+            {
+                builder.Append("                return ")
+                    .Append(ResultMappingFactory.MaterializeExpression(
+                        candidate.ResultMapping,
+                        environment,
+                        "raw query"))
+                    .AppendLine(";");
             }
 
             builder.AppendLine("            });");
@@ -965,8 +1137,12 @@ public sealed class CobaltumOrmTransformTask : Task
             ExpressionSyntax connection,
             ExpressionSyntax? transaction,
             string sql,
-            AnalysisResult analysis,
-            IReadOnlyList<InterpolationHole> holes)
+            AnalysisResult? analysis,
+            IReadOnlyList<InterpolationHole> holes,
+            ITypeSymbol? explicitResultType,
+            ResultMapping? resultMapping,
+            ExpressionSyntax? uncheckedSqlExpression,
+            UncheckedResultMapping? uncheckedResultMapping)
         {
             Invocation = invocation;
             Connection = connection;
@@ -974,20 +1150,38 @@ public sealed class CobaltumOrmTransformTask : Task
             Sql = sql;
             Analysis = analysis;
             Holes = holes;
+            ExplicitResultType = explicitResultType;
+            ResultMapping = resultMapping;
+            UncheckedSqlExpression = uncheckedSqlExpression;
+            UncheckedResultMapping = uncheckedResultMapping;
         }
 
         internal InvocationExpressionSyntax Invocation { get; }
         internal ExpressionSyntax Connection { get; }
         internal ExpressionSyntax? Transaction { get; }
         internal string Sql { get; }
-        internal AnalysisResult Analysis { get; }
+        internal AnalysisResult? Analysis { get; }
         internal IReadOnlyList<InterpolationHole> Holes { get; }
+        internal ITypeSymbol? ExplicitResultType { get; }
+        internal ResultMapping? ResultMapping { get; }
+        internal ExpressionSyntax? UncheckedSqlExpression { get; }
+        internal UncheckedResultMapping? UncheckedResultMapping { get; }
     }
 
     private sealed class QueryCandidate : PendingQuery
     {
         internal QueryCandidate(PendingQuery query, int index)
-            : base(query.Invocation, query.Connection, query.Transaction, query.Sql, query.Analysis, query.Holes)
+            : base(
+                query.Invocation,
+                query.Connection,
+                query.Transaction,
+                query.Sql,
+                query.Analysis,
+                query.Holes,
+                query.ExplicitResultType,
+                query.ResultMapping,
+                query.UncheckedSqlExpression,
+                query.UncheckedResultMapping)
         {
             Index = index;
         }

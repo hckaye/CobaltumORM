@@ -19,7 +19,22 @@ internal sealed class CreateWidgetsMigration : Migration
     public override void Down() => Delete.Table("widgets");
 }
 
-[Query("ById", "SELECT id, name FROM widgets WHERE id = @id")]
+[ResultHandler<WidgetResultHandler>]
+internal sealed record WidgetResult(long Id, string Name);
+
+internal sealed record UncheckedWidgetResult(long Id, [ResultColumn] string Name);
+
+internal sealed class WidgetResultHandler : IResultHandler<WidgetResult>
+{
+    public WidgetResultHandler()
+    {
+    }
+
+    public WidgetResult Read(System.Data.Common.DbDataReader reader) =>
+        new WidgetResult(reader.GetInt64(0), reader.GetString(1));
+}
+
+[Query<WidgetResult>("ById", "SELECT id, name FROM widgets WHERE id = @id")]
 internal static partial class WidgetQueries
 {
 }
@@ -53,6 +68,10 @@ internal static class Program
         }
 
         var rows = await WidgetQueries.ByIdAsync(connection, 1);
+        var uncheckedSql = "SELECT id, name FROM widgets WHERE id = 1";
+        var uncheckedRows = await connection
+            .NoCheckQuery<UncheckedWidgetResult>(uncheckedSql)
+            .ReadAsync();
         using var postgresCommand = new NpgsqlCommand();
         CobaltumParameter.AddConfigured(
             postgresCommand,
@@ -63,6 +82,7 @@ internal static class Program
         var postgresParameter = (NpgsqlParameter)postgresCommand.Parameters[0];
 
         if (listExitCode != 0 || catalog.Count != 1 || rows.Count != 1 || rows[0].Id != 1 || rows[0].Name != "native" ||
+            uncheckedRows.Count != 1 || uncheckedRows[0].Id != 1 || uncheckedRows[0].Name != "native" ||
             postgresParameter.DataTypeName != "jsonb")
         {
             return 1;

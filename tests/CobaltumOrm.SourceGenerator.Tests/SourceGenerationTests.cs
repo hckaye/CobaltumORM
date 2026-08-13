@@ -119,6 +119,190 @@ public sealed class SourceGenerationTests
     }
 
     [Fact]
+    public async Task GenericQueryAttributeUsesTheDeclaredResultType()
+    {
+        const string source = """
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            public sealed record UserView(int Id, string? DisplayName);
+
+            [Query<UserView>("All", "SELECT id, display_name FROM users")]
+            public static partial class UserQueries
+            {
+            }
+
+            public static class Consumer
+            {
+                public static async Task<UserView> Run(DbConnection connection)
+                {
+                    var rows = await UserQueries.AllAsync(connection);
+                    return rows[0];
+                }
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL, display_name text);")
+            });
+
+        AssertNoErrors(result);
+        Assert.Contains(
+            "CobaltumQueryDefinition<AllParameters, global::TestApp.UserView>",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("record AllResult", result.GeneratedText, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Reflection", result.GeneratedText, StringComparison.Ordinal);
+
+        var assembly = result.EmitAndLoad();
+        var connection = QueryFakeDbConnection.WithColumns(
+            new[] { "id", "display_name" },
+            new object?[] { 7, "alice" });
+        var consumer = assembly.GetType("TestApp.Consumer", throwOnError: true)!;
+        var task = Assert.IsAssignableFrom<Task>(consumer.GetMethod("Run")!.Invoke(
+            null,
+            new object[] { connection }));
+        await task;
+        var value = task.GetType().GetProperty("Result")!.GetValue(task)!;
+        Assert.Equal(7, value.GetType().GetProperty("Id")!.GetValue(value));
+        Assert.Equal("alice", value.GetType().GetProperty("DisplayName")!.GetValue(value));
+    }
+
+    [Fact]
+    public void GenericQueryAttributeReportsAnIncompatibleResultType()
+    {
+        const string source = """
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            public sealed record UserView(string Id, string Name);
+
+            [Query<UserView>("All", "SELECT id, name FROM users")]
+            public static partial class UserQueries
+            {
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL, name text NOT NULL);")
+            });
+
+        Assert.Contains(result.AllDiagnostics, diagnostic => diagnostic.Id == "COB009");
+        Assert.DoesNotContain("record AllResult", result.GeneratedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExplicitResultAttributesConfigureColumnsAndGeneratedHandlers()
+    {
+        const string source = """
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            public sealed class TextIdHandler : IValueHandler<int>
+            {
+                public int Read(DbDataReader reader, int ordinal) =>
+                    int.Parse(reader.GetString(ordinal), System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            public sealed record ExternalUser(
+                [ResultColumn("external_id"), ValueHandler<TextIdHandler>] int Id,
+                [ResultColumn] string Name);
+
+            [ResultHandler<UserCountHandler>]
+            public sealed record UserCount(int Value);
+
+            public sealed class UserCountHandler : IResultHandler<UserCount>
+            {
+                public UserCount Read(DbDataReader reader) => new UserCount(reader.GetInt32(0));
+            }
+
+            [Query<ExternalUser>("External", "SELECT external_id, name FROM users")]
+            [Query<UserCount>("Count", "SELECT COUNT(*) AS total FROM users")]
+            public static partial class UserQueries
+            {
+            }
+
+            public static class Consumer
+            {
+                public static async Task<int> Run(DbConnection connection)
+                {
+                    var users = await UserQueries.ExternalAsync(connection);
+                    var count = await UserQueries.CountAsync(connection);
+                    return users[0].Id + count[0].Value;
+                }
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (external_id text NOT NULL, name text NOT NULL);")
+            });
+
+        AssertNoErrors(result);
+        Assert.Contains(
+            "CobaltumHandlerCache<global::TestApp.TextIdHandler>.Instance.Read(reader, 0)",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CobaltumHandlerCache<global::TestApp.UserCountHandler>.Instance.Read(reader)",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Reflection", result.GeneratedText, StringComparison.Ordinal);
+
+        var assembly = result.EmitAndLoad();
+        var connection = new QueryFakeDbConnection(
+            new object?[] { "7", "alice" },
+            new object?[] { 3 });
+        var consumer = assembly.GetType("TestApp.Consumer", throwOnError: true)!;
+        var task = Assert.IsAssignableFrom<Task<int>>(consumer.GetMethod("Run")!.Invoke(
+            null,
+            new object[] { connection }));
+        Assert.Equal(10, await task);
+    }
+
+    [Fact]
+    public void InvalidExplicitResultHandlerFailsAtBuildTime()
+    {
+        const string source = """
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            [ResultHandler<WrongHandler>]
+            public sealed record UserView(int Id);
+
+            public sealed class WrongHandler
+            {
+            }
+
+            [Query<UserView>("All", "SELECT id FROM users")]
+            public static partial class UserQueries
+            {
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[] { ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL);") });
+
+        Assert.Contains(result.AllDiagnostics, diagnostic => diagnostic.Id == "COB009");
+        Assert.Contains(
+            result.AllDiagnostics,
+            diagnostic => diagnostic.GetMessage().Contains("IResultHandler", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void GeneratedTablesExposeTheTypedQueryChainAndReserveQueryColumnNames()
     {
         const string source = """

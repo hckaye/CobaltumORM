@@ -26,6 +26,7 @@ CobaltumORM は PostgreSQL を主な対象とする .NET / C# 向け ORM です�
 - [生成されるテーブル型](#生成されるテーブル型)
 - [名前付きクエリ](#名前付きクエリ)
 - [内容がコンパイル時に決まる `Query` の結果型](#内容がコンパイル時に決まる-query-の結果型)
+- [ユーザー定義の結果型](#ユーザー定義の結果型)
 - [補間文字列を使う `Query`](#補間文字列を使う-query)
 - [固定 SQL の `INSERT`、`UPDATE`、`DELETE`](#固定-sql-の-insertupdatedelete)
 - [コンパイル時の SQL 検査を行わない `NoCheckQuery`](#コンパイル時の-sql-検査を行わない-nocheckquery)
@@ -40,7 +41,7 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 
 - C# マイグレーションと Flyway 互換 SQL から、データベースへ接続せずにビルド時点のスキーマを組み立てます。
 - `Query("...")` と `[Query(...)]` の SQL をビルド時に解析します。対応している SQL では、文法とスキーマ、テーブル、列の存在を検査します。
-- 結果行を返す文の列名、C# 型、null 許容の有無から、クエリごとに結果型を生成します。`SELECT` に加え、`RETURNING` を持つ PostgreSQL の `INSERT`、`UPDATE`、`DELETE` が対象です。
+- 結果行を返す文では、結果型を生成するか、`Query<T>` または `[Query<T>]` で指定した型へマッピングします。
 - マイグレーションで名前を変更または削除すると、古い `SqlSchema` 参照と古い名前を含む SQL はコンパイルエラーになります。現在のスキーマでは実行できない SQL をビルド時に検出します。
   - 現在の検査対象は、PostgreSQL の CRUD 操作に関わる一部の構文です。権限、制約、トリガー、実データに依存する成否はビルド時には検査できません。
 - EF Core の変更追跡や `SaveChanges` に相当する API は提供しません。クエリと更新処理は明示的に実行します。
@@ -49,7 +50,7 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 
 | ORM | 主な使い方 | クエリと結果型 |
 | --- | --- | --- |
-| CobaltumORM | SQL を `Query` または `[Query]` で定義する | マイグレーションから得たスキーマに対して SQL をビルド時に検査し、結果行を返す文ごとの `record` 型を生成する |
+| CobaltumORM | SQL を `Query` または `[Query]` で定義する | マイグレーションから得たスキーマに対して SQL をビルド時に検査し、結果型を生成するかユーザー定義の型を検査する |
 | [EF Core](https://learn.microsoft.com/en-us/ef/core/) | `DbContext`、エンティティ、LINQ、変更追跡を使う。SQL を直接実行する API もある | LINQ の射影や、モデルに含まれるエンティティ、キーレスエンティティ、単一の値を表す型を使う |
 | [Dapper](https://github.com/DapperLib/Dapper) | `DbConnection` の `Query<T>` や `Execute` に SQL とパラメーターを渡す | `Query<T>` で指定した型へ変換するか、`Query` で実行時に列が決まる行を返す |
 
@@ -533,7 +534,7 @@ Query を定義するプロジェクトや生成されたスキーマ型を使�
 </ItemGroup>
 ```
 
-Query プロジェクトのビルド時に、指定したプロジェクトの `Migrations/**/*.cs` と `Migrations/V*__*.sql` を読み込みます。CLI が実行するものと同じ順序のマイグレーションから、`SqlSchema`、`Tables`、row の `record`、名前付き Query の結果型を生成し、直接書いた `Query(...)` も検査します。スキーマ生成だけが目的なら、マイグレーションの実行可能プロジェクトを通常の `ProjectReference` に追加する必要はありません。生成型をアプリケーション固有の namespace に置く場合は、Query プロジェクトで `CobaltumOrmGeneratedNamespace` を指定します。
+Query プロジェクトのビルド時に、指定したプロジェクトの `Migrations/**/*.cs` と `Migrations/V*__*.sql` を読み込みます。CLI が実行するものと同じ順序のマイグレーションから、`SqlSchema`、`Tables`、生成する row の `record`、名前付き Query の定義を作り、直接書いた `Query(...)` も検査します。スキーマ生成だけが目的なら、マイグレーションの実行可能プロジェクトを通常の `ProjectReference` に追加する必要はありません。生成型をアプリケーション固有の namespace に置く場合は、Query プロジェクトで `CobaltumOrmGeneratedNamespace` を指定します。
 
 Query を実行するアプリケーションから、マイグレーションプロジェクトで定義した接続も使う場合は、2 種類の参照を追加します。
 
@@ -641,6 +642,8 @@ public static partial class UserQueries
 
 各クエリから、結果型の `ByIdResult`、パラメーター型の `ByIdParameters`、型付きクエリ定義の `ById`、呼び出し用メソッドの `ByIdAsync` が生成されます。
 
+既存の結果型を使う場合は `[Query<TResult>]` を指定します。パラメーター型、クエリ定義、呼び出し用メソッドは生成されますが、`TResult` は生成されません。
+
 ```csharp
 var rows = await UserQueries.ByIdAsync(
     connection,
@@ -692,6 +695,42 @@ public static class UserReader
 
 `WithParameter` は SQL へ値を文字列連結せず、`DbParameter` として渡します。検査対象の文ではパラメーターの `DbType` を推論し、`json` / `jsonb` では PostgreSQL の型名もデータベースドライバーへ渡します。値を指定しなかったパラメーターは `ReadAsync` の前に検出されます。
 
+## ユーザー定義の結果型
+
+`Query<TResult>(sql)` と `[Query<TResult>(name, sql)]` は、結果行を既存の型へマッピングします。検査対象の `Query` では、結果列の名前、CLR 型、null 許容の有無を、使用するコンストラクターまたは書き込み可能なメンバーとビルド時に照合します。互換性がなければコンパイルエラーになります。`TResult` を指定した場合、結果型は生成しません。
+
+名前の大文字と小文字、記号の違いは無視するため、`display_name` は `DisplayName` に対応します。コンストラクターパラメーター、プロパティ、フィールドに `[ResultColumn("column_name")]` を付けると、対応する列名を明示できます。引数なしの `[ResultColumn]` はパラメーター名またはメンバー名を使います。既定の名前照合で足りる場合、attribute 自体を省略できます。
+
+```csharp
+using System.Data.Common;
+using CobaltumOrm;
+
+public readonly record struct UserId(long Value);
+
+public sealed class UserIdHandler : IValueHandler<UserId>
+{
+    public UserId Read(DbDataReader reader, int ordinal) =>
+        new UserId(reader.GetInt64(ordinal));
+}
+
+public sealed record UserView(
+    [ResultColumn("id"), ValueHandler<UserIdHandler>] UserId Id,
+    [ResultColumn] string? DisplayName);
+
+[Query<UserView>("All", "SELECT id, display_name FROM users")]
+public static partial class UserQueries
+{
+}
+
+var rows = await connection
+    .Query<UserView>("SELECT id, display_name FROM users")
+    .ReadAsync();
+```
+
+一つの値を変換する場合は `ValueHandler<THandler>` を付け、`THandler` に `IValueHandler<TValue>` を実装します。行全体を変換する場合は、結果型に `[ResultHandler<THandler>]` を付け、`IResultHandler<TResult>` を実装します。カスタムハンドラーを指定した部分の変換はハンドラーが受け持ちます。`Query` の SQL 自体は引き続きコンパイル時に検査されます。
+
+ハンドラー型には、public な引数なしコンストラクターが必要です。インスタンスは一つだけ作成して再利用するため、ハンドラーには変更可能な状態を持たせず、複数スレッドから呼ばれても動作するようにしてください。結果マッピングでは、実行時のリフレクションによる型走査やメンバー呼び出しを行いません。
+
 ## 補間文字列を使う `Query`
 
 補間文字列の `{...}` は、SQL の値を書ける位置でだけ使えます。補間した値はスキーマ名、テーブル名、列名などには展開されず、`DbParameter` のプレースホルダーに置き換えられます。
@@ -720,7 +759,7 @@ public static async System.Threading.Tasks.Task<string?> ReadByIdAsync(
 
 ## 固定 SQL の `INSERT`、`UPDATE`、`DELETE`
 
-コンパイル時定数で指定した `INSERT`、`UPDATE`、`DELETE` のうち、`RETURNING` を持たない文は `ExecuteAsync` で実行します。`RETURNING` を持つ文は `ReadAsync` で実行し、結果を受け取る `record` 型を生成します。
+コンパイル時定数で指定した `INSERT`、`UPDATE`、`DELETE` のうち、`RETURNING` を持たない文は `ExecuteAsync` で実行します。`RETURNING` を持つ文は `ReadAsync` で実行します。`Query<TResult>` で結果型を指定しなかった場合は、結果を受け取る `record` 型を生成します。
 
 ```csharp
 using System.Data;
@@ -776,6 +815,8 @@ public static class DynamicReader
 }
 ```
 
+動的 SQL の結果を既存の型へ格納する場合は `NoCheckQuery<TResult>(sql)` を使えます。ビルド時に確認できるのは、`TResult` の構造とハンドラー定義です。動的 SQL の結果列とは照合できません。必要な列がない場合、列名が重複する場合、null や CLR 型に互換性がない場合は、データを読み取った時点でエラーになります。既定のマッピングでは余分な列を無視します。
+
 `QueryDynamic(sql)` は互換性のために残している同等の API です。新しいコードでは、検査を行わないことが名前から分かる `NoCheckQuery(sql)` を使います。
 
 `CobaltumRawRow` は列番号と列名を保持し、`row[0]`、`row["id"]`、`GetValues("name")` で値を取得できます。重複した列名を文字列のインデクサーで取得すると、対象を一つに決められないことを示す例外が発生します。実行時に有無が変わる絞り込み条件のために SQL 文字列を組み立てる必要がなければ、`Tables.Users.Query().Where(...).WhereIf(condition, () => ...)` を使ってください。生成された `record` 型を保ったまま条件だけを追加できます。
@@ -813,7 +854,7 @@ Native AOT では `PublishAot` を使います。Native AOT では trim も行�
 dotnet publish -c Release -r linux-x64
 ```
 
-source generator が作る `CobaltumMigrationCatalog.All` は、実行時にアセンブリを走査しません。上の例のように、この一覧を `MigrationRunner` と `MigrationProjectHost` に渡してください。手書きの一覧は `MigrationInfo.Create<TMigration>(version, description)` で作れます。
+source generator が作る `CobaltumMigrationCatalog.All` は、実行時にアセンブリを走査しません。上の例のように、この一覧を `MigrationRunner` と `MigrationProjectHost` に渡してください。手書きの一覧は `MigrationInfo.Create<TMigration>(version, description)` で作れます。ユーザー定義のクエリ結果型とカスタムハンドラーも、実行時のリフレクションを使わず、生成コードから直接呼び出します。
 
 CobaltumORM は、PostgreSQL の `json` と `jsonb` に必要な Npgsql の設定を、生成コードから直接行います。それ以外の生成コードでは `DbType` を使います。PostgreSQL のプロジェクトには、インストールとマイグレーションプロジェクトの例にある Npgsql の参照が必要です。
 

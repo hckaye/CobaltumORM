@@ -456,7 +456,9 @@ internal static class GeneratedSourceWriter
             var source = queries[queryIndex];
             var analysis = analyses[queryIndex];
             var queryName = CSharpNames.Pascal(source.Name, "Query");
-            var resultName = queryName + "Result";
+            var resultName = source.ResultType == null
+                ? queryName + "Result"
+                : ResultMappingFactory.Display(source.ResultType);
             var parametersName = queryName + "Parameters";
             var resultNames = CSharpNames.Allocate(
                 analysis.Columns,
@@ -469,15 +471,28 @@ internal static class GeneratedSourceWriter
                 parameter => CSharpNames.Camel(parameter.Name, "parameter"),
                 reserved: new[] { "connection", "transaction", "cancellationToken" });
 
-            builder.Append("    public sealed record ").Append(resultName).AppendLine("(");
-            for (var index = 0; index < analysis.Columns.Count; index++)
+            ResultMapping? resultMapping = null;
+            if (source.ResultType == null)
             {
-                var column = analysis.Columns[index];
-                builder.Append("        ").Append(environment.TypeName(column.ClrType)).Append(' ').Append(resultNames[column]);
-                builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
-            }
+                builder.Append("    public sealed record ").Append(resultName).AppendLine("(");
+                for (var index = 0; index < analysis.Columns.Count; index++)
+                {
+                    var column = analysis.Columns[index];
+                    builder.Append("        ").Append(environment.TypeName(column.ClrType)).Append(' ').Append(resultNames[column]);
+                    builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
+                }
 
-            builder.AppendLine();
+                builder.AppendLine();
+            }
+            else
+            {
+                ResultMappingFactory.TryCreate(
+                    compilation,
+                    source.ResultType,
+                    analysis,
+                    out resultMapping,
+                    out _);
+            }
             if (analysis.Parameters.Count == 0)
             {
                 builder.Append("    public sealed record ").Append(parametersName).AppendLine("();");
@@ -525,14 +540,26 @@ internal static class GeneratedSourceWriter
             builder.AppendLine("            },");
             builder.AppendLine("            static reader =>");
             builder.AppendLine("            {");
-            builder.Append("                return new ").Append(resultName).AppendLine("(");
-            for (var index = 0; index < analysis.Columns.Count; index++)
+            if (resultMapping == null)
             {
-                builder.Append("                    ").Append(environment.ReadExpression(
-                    analysis.Columns[index].ClrType,
-                    index,
-                    source.Name + "." + analysis.Columns[index].Name));
-                builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
+                builder.Append("                return new ").Append(resultName).AppendLine("(");
+                for (var index = 0; index < analysis.Columns.Count; index++)
+                {
+                    builder.Append("                    ").Append(environment.ReadExpression(
+                        analysis.Columns[index].ClrType,
+                        index,
+                        source.Name + "." + analysis.Columns[index].Name));
+                    builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
+                }
+            }
+            else
+            {
+                builder.Append("                return ")
+                    .Append(ResultMappingFactory.MaterializeExpression(
+                        resultMapping,
+                        environment,
+                        source.Name))
+                    .AppendLine(";");
             }
 
             builder.AppendLine("            });");

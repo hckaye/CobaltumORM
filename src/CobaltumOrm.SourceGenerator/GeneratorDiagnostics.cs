@@ -69,4 +69,12 @@ internal static class GeneratorDiagnostics
         Category,
         DiagnosticSeverity.Error,
         true);
+
+    internal static readonly DiagnosticDescriptor ResultMapping = new DiagnosticDescriptor(
+        "COB009",
+        "Query result type cannot be mapped",
+        "Query result cannot be mapped to the specified type: {0}",
+        Category,
+        DiagnosticSeverity.Error,
+        true);
 }

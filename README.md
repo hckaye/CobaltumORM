@@ -27,6 +27,7 @@ compile-time SQL analysis support PostgreSQL, MySQL, SQLite, SQL Server, and Ora
 - [Generated table types](#generated-table-types)
 - [Named queries](#named-queries)
 - [Result types for constant `Query` SQL](#result-types-for-constant-query-sql)
+- [Caller-supplied result types](#caller-supplied-result-types)
 - [Interpolated `Query`](#interpolated-query)
 - [Constant `INSERT`, `UPDATE`, and `DELETE`](#constant-insert-update-and-delete)
 - [Queries without build-time SQL checking](#queries-without-build-time-sql-checking)
@@ -40,7 +41,7 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 
 - C# migrations and Flyway-compatible SQL build the schema without connecting to a database.
 - `Query("...")` and `[Query(...)]` SQL is analyzed at build time. Supported SQL is checked for syntax and references to existing schemas, tables, and columns.
-- Each statement that returns rows gets a generated result type based on its column names, C# types, and nullability. This includes `SELECT` and PostgreSQL `INSERT`, `UPDATE`, or `DELETE` with `RETURNING`.
+- A statement that returns rows can generate a result type or map to a type supplied through `Query<T>` or `[Query<T>]`.
 - Renaming or deleting a schema object in a migration makes old `SqlSchema` references and SQL that uses the old name fail to compile.
   - The current checker supports part of the PostgreSQL syntax used for CRUD operations. It cannot check permissions, constraints, triggers, or outcomes that depend on stored data.
 - CobaltumORM does not provide EF Core-style change tracking or an equivalent to `SaveChanges`. Queries and commands are executed explicitly.
@@ -49,7 +50,7 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 
 | ORM | Typical use | Queries and result types |
 | --- | --- | --- |
-| CobaltumORM | Define SQL with `Query` or `[Query]` | Check SQL against the schema built from migrations and generate a `record` type for each statement that returns rows |
+| CobaltumORM | Define SQL with `Query` or `[Query]` | Check SQL against the schema built from migrations, then generate a result type or validate a caller-supplied type |
 | [EF Core](https://learn.microsoft.com/en-us/ef/core/) | Use `DbContext`, entity models, LINQ, and change tracking. APIs for direct SQL execution are also available | Use LINQ projections or types in the model, including entities, keyless entities, and scalar types |
 | [Dapper](https://github.com/DapperLib/Dapper) | Pass SQL and parameters to `DbConnection` extension methods such as `Query<T>` and `Execute` | Map rows to the type supplied to `Query<T>`, or return rows whose columns are resolved at runtime with `Query` |
 
@@ -533,7 +534,7 @@ Add the migration project as a CobaltumORM migration input in each project that 
 </ItemGroup>
 ```
 
-The Query project reads `Migrations/**/*.cs` and `Migrations/V*__*.sql` from that project at build time. `SqlSchema`, `Tables`, row records, named Query result types, and direct `Query(...)` checks are generated from the same ordered migrations used by the CLI. A normal `ProjectReference` to the migration executable is not required when only schema generation is needed. Set `CobaltumOrmGeneratedNamespace` in the Query project when the generated types should use an application-specific namespace.
+The Query project reads `Migrations/**/*.cs` and `Migrations/V*__*.sql` from that project at build time. `SqlSchema`, `Tables`, generated row records, named Query definitions, and direct `Query(...)` checks use the same ordered migrations as the CLI. A normal `ProjectReference` to the migration executable is not required when only schema generation is needed. Set `CobaltumOrmGeneratedNamespace` in the Query project when the generated types should use an application-specific namespace.
 
 When the Query application should also use the connection defined by the migration project, add both references:
 
@@ -641,6 +642,8 @@ SQL with names written directly, such as `"SELECT id FROM accounts.users"`, is a
 
 Each query generates a result type such as `ByIdResult`, a parameter type such as `ByIdParameters`, a typed query definition such as `ById`, and an async method such as `ByIdAsync`.
 
+Use `[Query<TResult>]` to use an existing result type. The parameter type, query definition, and async method are still generated, but `TResult` is not generated.
+
 ```csharp
 var rows = await UserQueries.ByIdAsync(
     connection,
@@ -692,6 +695,42 @@ Supported `SELECT` syntax includes CTEs, recursive CTEs, `VALUES`, derived table
 
 `WithParameter` passes values as `DbParameter` instances instead of concatenating them into SQL. For checked statements, the parameter `DbType` is inferred. PostgreSQL type names are also passed to the database provider for `json` and `jsonb` parameters. Missing parameter values are detected before `ReadAsync` runs.
 
+## Caller-supplied result types
+
+`Query<TResult>(sql)` and `[Query<TResult>(name, sql)]` map returned rows to an existing type. For checked `Query`, the build compares returned column names, CLR types, and nullability with the selected constructor or writable members. It reports a compile error when the mapping is incompatible. No result type is generated when `TResult` is specified.
+
+Names are matched without case or punctuation differences, so `display_name` matches `DisplayName`. `[ResultColumn("column_name")]` sets an explicit column name on a constructor parameter, property, or field. `[ResultColumn]` without an argument uses the parameter or member name. The attribute can be omitted when the default name matching is sufficient.
+
+```csharp
+using System.Data.Common;
+using CobaltumOrm;
+
+public readonly record struct UserId(long Value);
+
+public sealed class UserIdHandler : IValueHandler<UserId>
+{
+    public UserId Read(DbDataReader reader, int ordinal) =>
+        new UserId(reader.GetInt64(ordinal));
+}
+
+public sealed record UserView(
+    [ResultColumn("id"), ValueHandler<UserIdHandler>] UserId Id,
+    [ResultColumn] string? DisplayName);
+
+[Query<UserView>("All", "SELECT id, display_name FROM users")]
+public static partial class UserQueries
+{
+}
+
+var rows = await connection
+    .Query<UserView>("SELECT id, display_name FROM users")
+    .ReadAsync();
+```
+
+`ValueHandler<THandler>` assigns a handler to one value. `THandler` must implement `IValueHandler<TValue>`. To control the entire row, put `[ResultHandler<THandler>]` on the result type and implement `IResultHandler<TResult>`. A custom handler takes responsibility for the conversion it controls, while the SQL itself remains checked by `Query`.
+
+Handler types must have a public parameterless constructor. One instance is cached and called directly from generated code, so handlers must be stateless and thread-safe. Result mapping does not scan types or invoke members through reflection at runtime.
+
 ## Interpolated `Query`
 
 Interpolation slots can only appear where SQL values are allowed. Interpolated values are not expanded into schema names, table names, column names, or other SQL structure. They are replaced with `DbParameter` placeholders.
@@ -720,7 +759,7 @@ Interpolated `INSERT`, `UPDATE`, and `DELETE` statements are not supported by ch
 
 ## Constant `INSERT`, `UPDATE`, and `DELETE`
 
-Compile-time constant `INSERT`, `UPDATE`, and `DELETE` statements without `RETURNING` run with `ExecuteAsync`. A statement with `RETURNING` runs with `ReadAsync` and gets a generated result `record`.
+Compile-time constant `INSERT`, `UPDATE`, and `DELETE` statements without `RETURNING` run with `ExecuteAsync`. A statement with `RETURNING` runs with `ReadAsync`. It gets a generated result `record` unless a result type is supplied to `Query<TResult>`.
 
 ```csharp
 using System.Data;
@@ -776,6 +815,8 @@ public static class DynamicReader
 }
 ```
 
+`NoCheckQuery<TResult>(sql)` uses the same generated mapping rules when a result type is needed for dynamic SQL. The build can check the structure of `TResult` and its handler declarations, but it cannot compare them with dynamic SQL. Missing, duplicate, null, or incompatible columns therefore fail while the data reader reads the row. Extra columns are ignored by the generated default mapper.
+
 `QueryDynamic(sql)` remains as an equivalent API for compatibility. New code should use `NoCheckQuery(sql)` because its name indicates that the SQL is not checked.
 
 `CobaltumRawRow` retains column ordinals and names. Values can be retrieved with `row[0]`, `row["id"]`, and `GetValues("name")`. Looking up a duplicate column name through the string indexer throws an exception because a single column cannot be selected. When SQL text does not need to be assembled for optional runtime filters, use `Tables.Users.Query().Where(...).WhereIf(condition, () => ...)`. It adds conditions without changing the generated `record` type.
@@ -813,7 +854,7 @@ Publish for the target runtime, for example:
 dotnet publish -c Release -r linux-x64
 ```
 
-The source generator creates `CobaltumMigrationCatalog.All` without scanning assemblies at runtime. Pass this catalog to `MigrationRunner` and `MigrationProjectHost`, as shown in the migration examples above. A handwritten catalog can use `MigrationInfo.Create<TMigration>(version, description)`.
+The source generator creates `CobaltumMigrationCatalog.All` without scanning assemblies at runtime. Pass this catalog to `MigrationRunner` and `MigrationProjectHost`, as shown in the migration examples above. A handwritten catalog can use `MigrationInfo.Create<TMigration>(version, description)`. Caller-supplied query result types and their custom handlers are also called through generated code without runtime reflection.
 
 CobaltumORM generates direct Npgsql parameter configuration for PostgreSQL `json` and `jsonb`; other generated provider bindings use `DbType`. PostgreSQL projects must reference Npgsql, as shown in the installation and migration project examples.
 

@@ -46,6 +46,7 @@ public sealed class QueryAttributeTests
             .GetMethods()
             .Single(candidate =>
                 candidate.Name == "Query" &&
+                !candidate.IsGenericMethod &&
                 candidate.GetParameters().Length == 3 &&
                 candidate.GetParameters()[1].ParameterType == typeof(string));
 
@@ -54,10 +55,36 @@ public sealed class QueryAttributeTests
             attribute => attribute.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.StringSyntaxAttribute" &&
                          Assert.IsType<string>(attribute.ConstructorArguments[0].Value) == "sql");
     }
+
+    [Fact]
+    public void GenericAttributeRetainsNameSqlAndResultType()
+    {
+        var attribute = Assert.Single(typeof(GenericQueries)
+            .GetCustomAttributes(typeof(QueryAttribute<WidgetResult>), false)
+            .Cast<QueryAttribute<WidgetResult>>());
+
+        Assert.Equal("All", attribute.Name);
+        Assert.Equal("select id, name from widgets", attribute.Sql);
+    }
+
+    [Fact]
+    public void ResultColumnNameCanBeOmitted()
+    {
+        Assert.Null(new ResultColumnAttribute().Name);
+        Assert.Equal("external_id", new ResultColumnAttribute("external_id").Name);
+        Assert.Throws<ArgumentException>(() => new ResultColumnAttribute(" "));
+    }
 }
 
 [Query("ById", "select * from widgets where id = @id")]
 internal partial class Queries
+{
+}
+
+internal sealed record WidgetResult(int Id, string Name);
+
+[Query<WidgetResult>("All", "select id, name from widgets")]
+internal partial class GenericQueries
 {
 }
 

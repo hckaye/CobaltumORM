@@ -8,6 +8,7 @@
     <TrimMode>full</TrimMode>
     <CobaltumOrmDatabaseProvider>Sqlite</CobaltumOrmDatabaseProvider>
     <CobaltumOrmGeneratedNamespace>CobaltumOrm.AotSmoke.Generated</CobaltumOrmGeneratedNamespace>
+    <CobaltumOrmCompilerTaskAssembly>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', '..', 'src', 'CobaltumOrm.Compiler', 'bin', '$(Configuration)', 'netstandard2.0', 'CobaltumOrm.Compiler.dll'))</CobaltumOrmCompilerTaskAssembly>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,4 +28,6 @@
     <CompilerVisibleProperty Include="CobaltumOrmDatabaseProvider" />
     <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
   </ItemGroup>
+
+  <Import Project="../../src/CobaltumOrm.SourceGenerator/buildTransitive/CobaltumOrm.SourceGenerator.targets" />
 </Project>

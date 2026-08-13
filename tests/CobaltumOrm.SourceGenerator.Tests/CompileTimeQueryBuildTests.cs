@@ -467,6 +467,131 @@ public sealed class CompileTimeQueryBuildTests
         Assert.Contains("Consumer.cs", result.Output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ExplicitResultTypesBuildWithoutGeneratingResultRecords()
+    {
+        var result = BuildFixture("""
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+
+            public sealed record UserResult(int Id, string Name);
+
+            public static class Consumer
+            {
+                public static async Task<UserResult> Checked(DbConnection connection)
+                {
+                    var rows = await connection
+                        .Query<UserResult>("SELECT name, id FROM users")
+                        .ReadAsync();
+                    return rows[0];
+                }
+
+                public static async Task<UserResult> Unchecked(DbConnection connection, string sql)
+                {
+                    var rows = await connection.NoCheckQuery<UserResult>(sql).ReadAsync();
+                    return rows[0];
+                }
+            }
+            """);
+
+        Assert.True(result.Succeeded, result.Output);
+        var generated = File.ReadAllText(Directory
+            .EnumerateFiles(result.Directory, "CobaltumOrm.RawQueries.g.cs", SearchOption.AllDirectories)
+            .Single());
+        Assert.Contains("CobaltumQueryDefinition<global::UserResult>", generated, StringComparison.Ordinal);
+        Assert.Contains("return new global::UserResult(", generated, StringComparison.Ordinal);
+        Assert.Contains("CobaltumResultReader.Read<int>", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("record Query0000Result", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Reflection", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CheckedExplicitResultTypeMismatchFailsTheBuild()
+    {
+        var result = BuildFixture("""
+            using System.Data.Common;
+            using CobaltumOrm;
+
+            public sealed record WrongUserResult(string Id, string Name);
+
+            public static class Consumer
+            {
+                public static object Read(DbConnection connection) =>
+                    connection.Query<WrongUserResult>("SELECT id, name FROM users").ReadAsync();
+            }
+            """);
+
+        Assert.False(result.Succeeded, result.Output);
+        Assert.Contains("COB109", result.Output, StringComparison.Ordinal);
+        Assert.Contains("cannot be mapped", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DirectExplicitResultAttributesAndHandlersGenerateDirectCalls()
+    {
+        var result = BuildFixture("""
+            using System.Data.Common;
+            using CobaltumOrm;
+
+            public readonly record struct UserId(int Value);
+
+            public sealed class UserIdHandler : IValueHandler<UserId>
+            {
+                public UserId Read(DbDataReader reader, int ordinal) =>
+                    new UserId(reader.GetInt32(ordinal));
+            }
+
+            public sealed record UserResult(
+                [ResultColumn("id"), ValueHandler<UserIdHandler>] UserId ExternalId,
+                [ResultColumn] string Name);
+
+            public static class Consumer
+            {
+                public static object Checked(DbConnection connection) =>
+                    connection.Query<UserResult>("SELECT id, name FROM users").ReadAsync();
+
+                public static object Unchecked(DbConnection connection, string sql) =>
+                    connection.NoCheckQuery<UserResult>(sql).ReadAsync();
+            }
+            """);
+
+        Assert.True(result.Succeeded, result.Output);
+        var generated = File.ReadAllText(Directory
+            .EnumerateFiles(result.Directory, "CobaltumOrm.RawQueries.g.cs", SearchOption.AllDirectories)
+            .Single());
+        Assert.Contains(
+            "CobaltumHandlerCache<global::UserIdHandler>.Instance.Read(reader, 0)",
+            generated,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CobaltumResultReader.GetOrdinal(reader, \"id\")",
+            generated,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Reflection", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CheckedExplicitResultTypeRequiresRows()
+    {
+        var result = BuildFixture("""
+            using System.Data.Common;
+            using CobaltumOrm;
+
+            public sealed record UserResult(int Id, string Name);
+
+            public static class Consumer
+            {
+                public static object Update(DbConnection connection) =>
+                    connection.Query<UserResult>("UPDATE users SET name = 'updated'").ExecuteAsync();
+            }
+            """);
+
+        Assert.False(result.Succeeded, result.Output);
+        Assert.Contains("COB109", result.Output, StringComparison.Ordinal);
+        Assert.Contains("requires a statement that returns rows", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static void AssertTransformationInputsRemainAnalyzerVisible(BuildResult result)
     {
         var taskDirectory = Path.Combine(result.Directory, "obj", "Release", "net10.0", "CobaltumOrm");
@@ -579,7 +704,20 @@ public sealed class CompileTimeQueryBuildTests
 
         var runtimeProject = SecurityElement.Escape(Path.Combine(repository, "src", "CobaltumOrm", "CobaltumOrm.csproj"));
         var migrationsProject = SecurityElement.Escape(Path.Combine(repository, "src", "CobaltumOrm.Migrations", "CobaltumOrm.Migrations.csproj"));
-        var packageDirectory = SecurityElement.Escape(GetPackageDirectory(repository));
+        var sourceGeneratorTargets = SecurityElement.Escape(Path.Combine(
+            repository,
+            "src",
+            "CobaltumOrm.SourceGenerator",
+            "buildTransitive",
+            "CobaltumOrm.SourceGenerator.targets"));
+        var compilerTaskAssembly = SecurityElement.Escape(Path.Combine(
+            repository,
+            "src",
+            "CobaltumOrm.Compiler",
+            "bin",
+            "Release",
+            "netstandard2.0",
+            "CobaltumOrm.Compiler.dll"));
         var providerProperty = databaseProvider is null
             ? string.Empty
             : "    <CobaltumOrmDatabaseProvider>" + SecurityElement.Escape(databaseProvider) + "</CobaltumOrmDatabaseProvider>\n";
@@ -589,16 +727,19 @@ public sealed class CompileTimeQueryBuildTests
                 <TargetFramework>net10.0</TargetFramework>
                 <Nullable>enable</Nullable>
                 <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+                <CobaltumOrmCompilerTaskAssembly>{{compilerTaskAssembly}}</CobaltumOrmCompilerTaskAssembly>
             {{providerProperty}}
                 <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
                 <CompilerGeneratedFilesOutputPath>$(IntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
                 <RestorePackagesPath>{{SecurityElement.Escape(Path.Combine(GetPackageDirectory(repository), ".packages"))}}</RestorePackagesPath>
-                <RestoreSources>{{packageDirectory}};https://api.nuget.org/v3/index.json</RestoreSources>
+                <RestoreSources>https://api.nuget.org/v3/index.json</RestoreSources>
               </PropertyGroup>
               <ItemGroup>
                 <ProjectReference Include="{{runtimeProject}}" />
                 <ProjectReference Include="{{migrationsProject}}" />
-                <PackageReference Include="CobaltumOrm.SourceGenerator" Version="0.0.1" PrivateAssets="all" />
+                <ProjectReference Include="{{SecurityElement.Escape(Path.Combine(repository, "src", "CobaltumOrm.SourceGenerator", "CobaltumOrm.SourceGenerator.csproj"))}}"
+                                  OutputItemType="Analyzer"
+                                  ReferenceOutputAssembly="false" />
                 <PackageReference Include="Npgsql" Version="10.0.3" />
               </ItemGroup>
               <Target Name="CaptureCobaltumCompileItems"
@@ -608,6 +749,7 @@ public sealed class CompileTimeQueryBuildTests
                                   Lines="@(Compile->'%(FullPath)|%(AutoGen)|%(DesignTime)')"
                                   Overwrite="true" />
               </Target>
+              <Import Project="{{sourceGeneratorTargets}}" />
             </Project>
             """);
 
