@@ -22,7 +22,9 @@ internal static class GeneratorTestHost
         IEnumerable<(string Path, string Text)>? additionalFiles = null,
         bool netStandard20 = false,
         string generatedNamespace = "TestApp.Generated",
-        string? databaseProvider = null)
+        string? databaseProvider = null,
+        string? analysisCacheDirectory = null,
+        bool analysisCacheEnabled = true)
     {
         var parseOptions = CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.CSharp12);
         var syntaxTree = CSharpSyntaxTree.ParseText(source, parseOptions, path: "Consumer.cs");
@@ -42,10 +44,16 @@ internal static class GeneratorTestHost
         var globalOptions = new Dictionary<string, string>
         {
             ["build_property.CobaltumOrmGeneratedNamespace"] = generatedNamespace,
+            ["build_property.CobaltumOrmAnalysisCache"] = analysisCacheEnabled ? "true" : "false",
         };
         if (databaseProvider != null)
         {
             globalOptions["build_property.CobaltumOrmDatabaseProvider"] = databaseProvider;
+        }
+
+        if (analysisCacheDirectory != null)
+        {
+            globalOptions["build_property._CobaltumOrmAnalysisCacheDirectory"] = analysisCacheDirectory;
         }
 
         var options = new TestAnalyzerConfigOptionsProvider(globalOptions);

@@ -85,6 +85,31 @@ public sealed class GenerateIntegrationTests
         Assert.Contains(fromCommand.Keys, name => name.EndsWith(".cobaltum.cs", StringComparison.Ordinal));
         Assert.Contains(fromCommand.Keys, name => name.StartsWith("CobaltumOrm.Queries.", StringComparison.Ordinal));
 
+        var cacheDirectory = Path.Combine(
+            fixture.Root,
+            "obj",
+            "Release",
+            "net10.0",
+            "CobaltumOrm",
+            "AnalysisCache");
+        var cacheFiles = Directory.GetFiles(cacheDirectory, "*.xml");
+        Assert.NotEmpty(cacheFiles);
+        Assert.Contains(cacheFiles, path =>
+            Path.GetFileName(path).StartsWith("schema-", StringComparison.Ordinal));
+        Assert.Contains(cacheFiles, path =>
+            Path.GetFileName(path).StartsWith("query-", StringComparison.Ordinal));
+        var preservedTimestamp = new DateTime(2001, 2, 3, 4, 5, 6, DateTimeKind.Utc);
+        foreach (var cacheFile in cacheFiles)
+        {
+            File.SetLastWriteTimeUtc(cacheFile, preservedTimestamp);
+        }
+
+        var repeatedRun = await fixture.GenerateAsync(
+            "--output-mode", "directory", "--output", output);
+        Assert.True(repeatedRun.ExitCode == 0, repeatedRun.Output + repeatedRun.Error);
+        Assert.All(cacheFiles, cacheFile =>
+            Assert.Equal(preservedTimestamp, File.GetLastWriteTimeUtc(cacheFile)));
+
         fixture.Clean();
         var explicitBuild = fixture.RunDotnet(
             "build",

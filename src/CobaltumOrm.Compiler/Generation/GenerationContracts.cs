@@ -46,6 +46,12 @@ public sealed class GenerationRequest
     /// <summary>The configured database provider name.</summary>
     public string? DatabaseProvider { get; set; }
 
+    /// <summary>Directory used for successful SQL analysis cache entries.</summary>
+    public string? AnalysisCacheDirectory { get; set; }
+
+    /// <summary>Whether persistent SQL analysis caching is enabled.</summary>
+    public bool AnalysisCacheEnabled { get; set; } = true;
+
     /// <summary>
     /// Runs the incremental source generator over the transformed compilation and returns its
     /// files as well. The MSBuild path leaves this off because the C# compiler runs the

@@ -65,6 +65,8 @@ internal sealed class GenerateCommand
             Nullable = evaluation.Nullable,
             GeneratedNamespace = generatedNamespace,
             DatabaseProvider = provider,
+            AnalysisCacheDirectory = NullIfEmpty(evaluation.AnalysisCacheDirectory),
+            AnalysisCacheEnabled = evaluation.AnalysisCacheEnabled,
             IncludeGeneratorOutput = true,
         });
 

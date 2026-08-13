@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -592,6 +593,27 @@ public sealed class CompileTimeQueryBuildTests
         Assert.Contains("requires a statement that returns rows", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void BuildOutputIsIdenticalWithAnalysisCacheEnabledOrDisabled()
+    {
+        const string source = """
+            using CobaltumOrm;
+
+            [Query("AllUsers", "SELECT id, name FROM users")]
+            public static partial class UserQueries { }
+            """;
+        var enabled = BuildFixture(source, analysisCacheEnabled: true);
+        var disabled = BuildFixture(source, analysisCacheEnabled: false);
+
+        Assert.True(enabled.Succeeded, enabled.Output);
+        Assert.True(disabled.Succeeded, disabled.Output);
+        Assert.DoesNotContain(" warning COB", enabled.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(" error COB", enabled.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(" warning COB", disabled.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(" error COB", disabled.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(CompilerGeneratedSources(enabled), CompilerGeneratedSources(disabled));
+    }
+
     private static void AssertTransformationInputsRemainAnalyzerVisible(BuildResult result)
     {
         var taskDirectory = Path.Combine(result.Directory, "obj", "Release", "net10.0", "CobaltumOrm");
@@ -662,7 +684,17 @@ public sealed class CompileTimeQueryBuildTests
         return new CompileItemState(fields[0], fields[1], fields[2]);
     }
 
-    private static BuildResult BuildFixture(string source, string? databaseProvider = null)
+    private static Dictionary<string, string> CompilerGeneratedSources(BuildResult result) => Directory
+        .EnumerateFiles(
+            Path.Combine(result.Directory, "generated"),
+            "*.cs",
+            SearchOption.AllDirectories)
+        .ToDictionary(path => Path.GetFileName(path), File.ReadAllText, StringComparer.Ordinal);
+
+    private static BuildResult BuildFixture(
+        string source,
+        string? databaseProvider = null,
+        bool analysisCacheEnabled = true)
     {
         var repository = FindRepositoryRoot();
         var directory = Path.Combine(Path.GetTempPath(), "CobaltumOrm.BuildTests", Guid.NewGuid().ToString("N"));
@@ -728,6 +760,7 @@ public sealed class CompileTimeQueryBuildTests
                 <Nullable>enable</Nullable>
                 <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
                 <CobaltumOrmCompilerTaskAssembly>{{compilerTaskAssembly}}</CobaltumOrmCompilerTaskAssembly>
+                <CobaltumOrmAnalysisCache>{{analysisCacheEnabled.ToString().ToLowerInvariant()}}</CobaltumOrmAnalysisCache>
             {{providerProperty}}
                 <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
                 <CompilerGeneratedFilesOutputPath>$(IntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>

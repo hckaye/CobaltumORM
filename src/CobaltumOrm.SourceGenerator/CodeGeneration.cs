@@ -305,7 +305,8 @@ internal static class GeneratedSourceWriter
         string generatedNamespace,
         DatabaseSchema schema,
         Compilation compilation,
-        IDatabaseDialect dialect)
+        IDatabaseDialect dialect,
+        AnalysisCache analysisCache)
     {
         var environment = new TypeEnvironment(compilation);
         var tables = schema.Tables
@@ -324,7 +325,10 @@ internal static class GeneratedSourceWriter
         foreach (var table in tables)
         {
             var recordName = tableNames[table];
-            var query = dialect.QueryAnalyzer.Analyze(schema, "SELECT * FROM " + Qualify(table, dialect));
+            var query = analysisCache.AnalyzeQuery(
+                schema,
+                "SELECT * FROM " + Qualify(table, dialect),
+                dialect.QueryAnalyzer);
             if (query.HasErrors)
             {
                 continue;
@@ -373,7 +377,10 @@ internal static class GeneratedSourceWriter
         foreach (var table in tables)
         {
             var recordName = tableNames[table];
-            var query = dialect.QueryAnalyzer.Analyze(schema, "SELECT * FROM " + Qualify(table, dialect));
+            var query = analysisCache.AnalyzeQuery(
+                schema,
+                "SELECT * FROM " + Qualify(table, dialect),
+                dialect.QueryAnalyzer);
             if (query.HasErrors)
             {
                 continue;

@@ -29,6 +29,10 @@ internal sealed class ProjectEvaluation
 
     public string GeneratedNamespace { get; set; } = string.Empty;
 
+    public bool AnalysisCacheEnabled { get; set; } = true;
+
+    public string AnalysisCacheDirectory { get; set; } = string.Empty;
+
     public List<string> CompileFiles { get; } = new();
 
     public List<string> References { get; } = new();
@@ -91,6 +95,15 @@ internal sealed class ProjectEvaluation
                     break;
                 case "generatednamespace":
                     evaluation.GeneratedNamespace = value;
+                    break;
+                case "analysiscache":
+                    evaluation.AnalysisCacheEnabled = !string.Equals(
+                        value,
+                        "false",
+                        StringComparison.OrdinalIgnoreCase);
+                    break;
+                case "analysiscachedirectory":
+                    evaluation.AnalysisCacheDirectory = value;
                     break;
                 case "compile":
                     Add(evaluation.CompileFiles, value);

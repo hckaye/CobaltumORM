@@ -5,7 +5,15 @@
     references, AdditionalFiles, migration project inputs, and compiler properties, so the
     command sees exactly what the normal build sees. It never edits the project.
   -->
+  <PropertyGroup>
+    <CobaltumOrmAnalysisCache Condition="'$(CobaltumOrmAnalysisCache)' == ''">true</CobaltumOrmAnalysisCache>
+  </PropertyGroup>
+
   <Target Name="CobaltumOrmWriteGenerationInputs" DependsOnTargets="ResolveReferences">
+    <PropertyGroup>
+      <CobaltumOrmIntermediateOutputPath Condition="'$(CobaltumOrmIntermediateOutputPath)' == ''">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'CobaltumOrm'))</CobaltumOrmIntermediateOutputPath>
+      <_CobaltumOrmAnalysisCacheDirectory>$([MSBuild]::NormalizePath('$(CobaltumOrmIntermediateOutputPath)', 'AnalysisCache'))</_CobaltumOrmAnalysisCacheDirectory>
+    </PropertyGroup>
     <Error Condition="'$(CobaltumOrmGenerationInputsFile)' == ''"
            Text="CobaltumOrmGenerationInputsFile must be set when running CobaltumOrmWriteGenerationInputs." />
 
@@ -41,6 +49,8 @@
       <_CobaltumOrmGenerationLine Include="defineconstants=$([MSBuild]::Escape('$(DefineConstants)'))" />
       <_CobaltumOrmGenerationLine Include="databaseprovider=$(CobaltumOrmDatabaseProvider)" />
       <_CobaltumOrmGenerationLine Include="generatednamespace=$(CobaltumOrmGeneratedNamespace)" />
+      <_CobaltumOrmGenerationLine Include="analysiscache=$(CobaltumOrmAnalysisCache)" />
+      <_CobaltumOrmGenerationLine Include="analysiscachedirectory=$(_CobaltumOrmAnalysisCacheDirectory)" />
       <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateCompile->'compile=%(FullPath)')" />
       <_CobaltumOrmGenerationLine Include="@(ReferencePath->'reference=%(FullPath)')" />
       <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateAdditionalFile->'additionalfile=%(FullPath)')" />
