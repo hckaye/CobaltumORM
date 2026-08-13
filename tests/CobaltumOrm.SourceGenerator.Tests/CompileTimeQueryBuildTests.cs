@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -400,6 +401,182 @@ public sealed class CompileTimeQueryBuildTests
     }
 
     [Fact]
+    public void UnchangedBuildSkipsTransformAndRestoresTransformedCompileItems()
+    {
+        var fixture = CreateBuildFixture(ValidQuerySource());
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+
+        var manifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+        Thread.Sleep(100);
+
+        var second = fixture.Build();
+        Assert.True(second.Succeeded, second.Output);
+        Assert.Equal(manifestWriteTime, File.GetLastWriteTimeUtc(fixture.SuccessManifestPath));
+        AssertTransformationInputsRemainAnalyzerVisible(second, assertGeneratedModels: false);
+    }
+
+    [Fact]
+    public void SourceEditRerunsTransform()
+    {
+        var fixture = CreateBuildFixture(ValidQuerySource());
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+        var manifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+
+        Thread.Sleep(100);
+        File.AppendAllText(
+            fixture.ConsumerPath,
+            "\npublic static class UnrelatedSourceEdit { public const int Value = 1; }\n");
+
+        var second = fixture.Build();
+        Assert.True(second.Succeeded, second.Output);
+        Assert.True(File.GetLastWriteTimeUtc(fixture.SuccessManifestPath) > manifestWriteTime);
+        var transformed = Directory
+            .EnumerateFiles(fixture.TaskDirectory, "*.cobaltum.cs", SearchOption.TopDirectoryOnly)
+            .Single();
+        Assert.Contains("UnrelatedSourceEdit", File.ReadAllText(transformed), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SourceAddAndDeleteInvalidateTransformAndRemoveStaleOutputs()
+    {
+        var fixture = CreateBuildFixture(ValidQuerySource());
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+        var initialTransformed = Directory
+            .EnumerateFiles(fixture.TaskDirectory, "*.cobaltum.cs", SearchOption.TopDirectoryOnly)
+            .Single();
+        var firstManifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+
+        Thread.Sleep(100);
+        File.WriteAllText(
+            Path.Combine(fixture.RootDirectory, "ZAdded.cs"),
+            "public static class AddedSource { public const int Value = 1; }\n");
+        var added = fixture.Build();
+        Assert.True(added.Succeeded, added.Output);
+        Assert.True(File.GetLastWriteTimeUtc(fixture.SuccessManifestPath) > firstManifestWriteTime);
+        Assert.True(File.Exists(initialTransformed));
+
+        var secondManifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+        Thread.Sleep(100);
+        File.Delete(fixture.ConsumerPath);
+        var deleted = fixture.Build();
+        Assert.True(deleted.Succeeded, deleted.Output);
+        Assert.True(File.GetLastWriteTimeUtc(fixture.SuccessManifestPath) > secondManifestWriteTime);
+        Assert.Empty(Directory.EnumerateFiles(fixture.TaskDirectory, "*.cobaltum.cs", SearchOption.TopDirectoryOnly));
+
+        var compileItems = File.ReadAllLines(fixture.CompileItemsPath);
+        Assert.DoesNotContain(compileItems, line => Path.GetFileName(CompileItem(line).Path) == "Consumer.cs");
+        Assert.DoesNotContain(compileItems, line => Path.GetFileName(CompileItem(line).Path).EndsWith(".cobaltum.cs", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SqlMigrationEditRerunsTransform()
+    {
+        var fixture = CreateBuildFixture(ValidQuerySource());
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+        var manifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+
+        Thread.Sleep(100);
+        var migrationsDirectory = Directory.CreateDirectory(Path.Combine(fixture.RootDirectory, "Migrations"));
+        var sqlPath = Path.Combine(migrationsDirectory.FullName, "V2__add_email.sql");
+        File.WriteAllText(sqlPath, "ALTER TABLE users ADD COLUMN email text;");
+
+        var second = fixture.Build();
+        Assert.True(second.Succeeded, second.Output);
+        Assert.True(File.GetLastWriteTimeUtc(fixture.SuccessManifestPath) > manifestWriteTime);
+        var schemaPath = Path.Combine(fixture.TaskDirectory, "CobaltumOrm.SqlSchema.g.cs");
+        Assert.Contains("Email", File.ReadAllText(schemaPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MissingGeneratedAndTransformedOutputsRerunTransform()
+    {
+        var fixture = CreateBuildFixture(ValidQuerySource());
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+        var schemaPath = Path.Combine(fixture.TaskDirectory, "CobaltumOrm.SqlSchema.g.cs");
+        var transformedPath = Directory
+            .EnumerateFiles(fixture.TaskDirectory, "*.cobaltum.cs", SearchOption.TopDirectoryOnly)
+            .Single();
+        var firstManifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+
+        File.Delete(schemaPath);
+        var missingGenerated = fixture.Build();
+        Assert.True(missingGenerated.Succeeded, missingGenerated.Output);
+        Assert.True(File.Exists(schemaPath));
+        var secondManifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+        Assert.True(secondManifestWriteTime > firstManifestWriteTime);
+
+        Thread.Sleep(100);
+        File.Delete(transformedPath);
+        var missingTransformed = fixture.Build();
+        Assert.True(missingTransformed.Succeeded, missingTransformed.Output);
+        Assert.True(File.Exists(transformedPath));
+        Assert.True(File.GetLastWriteTimeUtc(fixture.SuccessManifestPath) > secondManifestWriteTime);
+    }
+
+    [Fact]
+    public void FailedBuildWithoutManifestIsRetriedUnchanged()
+    {
+        var fixture = CreateBuildFixture("""
+            using System.Data.Common;
+            using CobaltumOrm;
+
+            public static class Consumer
+            {
+                public static object Read(DbConnection connection) =>
+                    connection.Query("SELECT email FROM users").ReadAsync();
+            }
+            """);
+
+        var first = fixture.Build();
+        Assert.False(first.Succeeded, first.Output);
+        Assert.False(File.Exists(fixture.SuccessManifestPath));
+
+        var second = fixture.Build();
+        Assert.False(second.Succeeded, second.Output);
+        Assert.Contains("SQL203", second.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProviderAndGeneratedNamespaceChangesRerunTransform()
+    {
+        var fixture = CreateBuildFixture(ValidQuerySource(), "PostgreSql");
+        var first = fixture.Build();
+        Assert.True(first.Succeeded, first.Output);
+        var manifestWriteTime = File.GetLastWriteTimeUtc(fixture.SuccessManifestPath);
+
+        Thread.Sleep(100);
+        fixture.SetProperty("CobaltumOrmDatabaseProvider", "MySql");
+        fixture.SetProperty("CobaltumOrmGeneratedNamespace", "Custom.Generated");
+        var second = fixture.Build();
+        Assert.True(second.Succeeded, second.Output);
+        Assert.True(File.GetLastWriteTimeUtc(fixture.SuccessManifestPath) > manifestWriteTime);
+
+        var schema = File.ReadAllText(Path.Combine(fixture.TaskDirectory, "CobaltumOrm.SqlSchema.g.cs"));
+        Assert.Contains("namespace Custom.Generated", schema, StringComparison.Ordinal);
+        Assert.Contains("Name = \"`users`\";", schema, StringComparison.Ordinal);
+    }
+
+    private static string ValidQuerySource() => """
+        using System.Data.Common;
+        using System.Threading.Tasks;
+        using CobaltumOrm;
+
+        public static class Consumer
+        {
+            public static async Task<string> Read(DbConnection connection)
+            {
+                var rows = await connection.Query("SELECT id, name FROM users").ReadAsync();
+                return rows[0].Name;
+            }
+        }
+        """;
+
+    [Fact]
     public void LiteralDmlReturningAndCheckedNamedParametersBuild()
     {
         var result = BuildFixture("""
@@ -592,7 +769,9 @@ public sealed class CompileTimeQueryBuildTests
         Assert.Contains("requires a statement that returns rows", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void AssertTransformationInputsRemainAnalyzerVisible(BuildResult result)
+    private static void AssertTransformationInputsRemainAnalyzerVisible(
+        BuildResult result,
+        bool assertGeneratedModels = true)
     {
         var taskDirectory = Path.Combine(result.Directory, "obj", "Release", "net10.0", "CobaltumOrm");
         var transformedPath = Directory
@@ -648,11 +827,14 @@ public sealed class CompileTimeQueryBuildTests
         Assert.Equal("true", sqlSchemaItem.AutoGen, ignoreCase: true);
         Assert.Equal("true", sqlSchemaItem.DesignTime, ignoreCase: true);
 
-        var generatedModels = Directory
-            .EnumerateFiles(result.Directory, "CobaltumOrm.Models.g.cs", SearchOption.AllDirectories)
-            .ToArray();
-        Assert.Single(generatedModels);
-        Assert.Contains("UsersRow", File.ReadAllText(generatedModels[0]), StringComparison.Ordinal);
+        if (assertGeneratedModels)
+        {
+            var generatedModels = Directory
+                .EnumerateFiles(result.Directory, "CobaltumOrm.Models.g.cs", SearchOption.AllDirectories)
+                .ToArray();
+            Assert.Single(generatedModels);
+            Assert.Contains("UsersRow", File.ReadAllText(generatedModels[0]), StringComparison.Ordinal);
+        }
     }
 
     private static CompileItemState CompileItem(string line)
@@ -662,7 +844,10 @@ public sealed class CompileTimeQueryBuildTests
         return new CompileItemState(fields[0], fields[1], fields[2]);
     }
 
-    private static BuildResult BuildFixture(string source, string? databaseProvider = null)
+    private static BuildResult BuildFixture(string source, string? databaseProvider = null) =>
+        CreateBuildFixture(source, databaseProvider).Build();
+
+    private static BuildFixtureHandle CreateBuildFixture(string source, string? databaseProvider = null)
     {
         var repository = FindRepositoryRoot();
         var directory = Path.Combine(Path.GetTempPath(), "CobaltumOrm.BuildTests", Guid.NewGuid().ToString("N"));
@@ -735,12 +920,14 @@ public sealed class CompileTimeQueryBuildTests
                 <RestoreSources>https://api.nuget.org/v3/index.json</RestoreSources>
               </PropertyGroup>
               <ItemGroup>
+                <Compile Remove="$(IntermediateOutputPath)generated/**/*.cs" />
                 <ProjectReference Include="{{runtimeProject}}" />
                 <ProjectReference Include="{{migrationsProject}}" />
                 <ProjectReference Include="{{SecurityElement.Escape(Path.Combine(repository, "src", "CobaltumOrm.SourceGenerator", "CobaltumOrm.SourceGenerator.csproj"))}}"
                                   OutputItemType="Analyzer"
                                   ReferenceOutputAssembly="false" />
                 <PackageReference Include="Npgsql" Version="10.0.3" />
+                <AdditionalFiles Include="Migrations/V*__*.sql" />
               </ItemGroup>
               <Target Name="CaptureCobaltumCompileItems"
                       BeforeTargets="CoreCompile"
@@ -753,8 +940,13 @@ public sealed class CompileTimeQueryBuildTests
             </Project>
             """);
 
-        var process = RunDotnet(directory, "build", "Fixture.csproj", "-c", "Release", "--nologo");
-        return new BuildResult(directory, process.ExitCode == 0, process.Output);
+        return new BuildFixtureHandle(
+            directory,
+            Path.Combine(directory, "Fixture.csproj"),
+            Path.Combine(directory, "Consumer.cs"),
+            taskDirectory,
+            Path.Combine(directory, "obj", "Release", "net10.0", "CobaltumCompileItems.txt"),
+            Path.Combine(taskDirectory, "CobaltumOrm.TransformSuccess.xml"));
     }
 
     private static string CSharpLiteral(string value) =>
@@ -822,6 +1014,81 @@ public sealed class CompileTimeQueryBuildTests
         }
 
         return directory?.FullName ?? throw new InvalidOperationException("Could not locate CobaltumOrm.sln.");
+    }
+
+    private sealed class BuildFixtureHandle
+    {
+        internal BuildFixtureHandle(
+            string rootDirectory,
+            string projectPath,
+            string consumerPath,
+            string taskDirectory,
+            string compileItemsPath,
+            string successManifestPath)
+        {
+            RootDirectory = rootDirectory;
+            ProjectPath = projectPath;
+            ConsumerPath = consumerPath;
+            TaskDirectory = taskDirectory;
+            CompileItemsPath = compileItemsPath;
+            SuccessManifestPath = successManifestPath;
+        }
+
+        internal string RootDirectory { get; }
+
+        internal string ProjectPath { get; }
+
+        internal string ConsumerPath { get; }
+
+        internal string TaskDirectory { get; }
+
+        internal string CompileItemsPath { get; }
+
+        internal string SuccessManifestPath { get; }
+
+        private bool _hasBuilt;
+
+        internal BuildResult Build(params string[] additionalArguments)
+        {
+            if (_hasBuilt)
+            {
+                var generatedDirectory = Path.Combine(RootDirectory, "generated");
+                if (Directory.Exists(generatedDirectory))
+                {
+                    Directory.Delete(generatedDirectory, recursive: true);
+                }
+            }
+
+            var arguments = new[] { "build", ProjectPath, "-c", "Release", "--nologo" }
+                .Concat(_hasBuilt ? new[] { "--no-dependencies" } : Array.Empty<string>())
+                .Concat(additionalArguments)
+                .ToArray();
+            var process = RunDotnet(RootDirectory, arguments);
+            _hasBuilt = true;
+            return new BuildResult(RootDirectory, process.ExitCode == 0, process.Output);
+        }
+
+        internal void SetProperty(string name, string value)
+        {
+            var lines = File.ReadAllLines(ProjectPath).ToList();
+            var opening = "<" + name + ">";
+            var closing = "</" + name + ">";
+            var replacement = "    " + opening + SecurityElement.Escape(value) + closing;
+            for (var index = 0; index < lines.Count; index++)
+            {
+                if (lines[index].TrimStart().StartsWith(opening, StringComparison.Ordinal))
+                {
+                    lines[index] = replacement;
+                    File.WriteAllLines(ProjectPath, lines);
+                    return;
+                }
+            }
+
+            var propertyGroupEnd = lines.FindIndex(line => line.Trim() == "</PropertyGroup>");
+            Assert.True(propertyGroupEnd >= 0, "Fixture property group was not found.");
+            lines.Insert(propertyGroupEnd, replacement);
+            File.WriteAllLines(ProjectPath, lines);
+        }
     }
 
     private sealed record BuildResult(string Directory, bool Succeeded, string Output);

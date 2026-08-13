@@ -48,6 +48,8 @@ Each scenario runs once for warmup. The benchmark then reports the median, minim
 
 ## Results from 2026-08-13
 
+These measurements were collected before the MSBuild transform cache was added. They describe the baseline before this optimization.
+
 These results were collected on a MacBook Air with a 10-core Apple M5 and 32 GB of memory, running macOS 26.5.2 and .NET SDK 10.0.203. Each scenario has three recorded samples. Times are milliseconds.
 
 | Profile | Variant | Build | Median | Minimum | Maximum |
@@ -81,4 +83,4 @@ The added time over the matching plain project was:
 
 At 100 queries of each form, the added time remained below one second. At 500 of each form, it ranged from 2.7 to 8.3 seconds. At 1,000 of each form, it ranged from 11.5 to 13.2 seconds.
 
-The `large` no-change build took 12.8 seconds, close to its 14.5-second clean build. `CobaltumOrmTransformSources` currently has no MSBuild input and output declaration that skips the task when its inputs are unchanged, so it analyzes the migrations and sources during no-change builds. Changing one C# file also changes the complete compilation supplied to the Source Generator, causing the schema and all queries to be analyzed again.
+After a successful build, a no-change build compares the ordered source, migration, SQL, reference, task assembly, and behavior-setting inputs with a readable manifest. When they are unchanged and every generated output exists, MSBuild skips the expensive transform and restores the recorded `Compile` items. Adding, removing, or editing a relevant input, changing a provider or generated namespace, changing a reference or task assembly, or removing an output runs the transform again. An unrelated C# edit also invalidates the transform because constants, result types, migrations, and name resolution can affect queries across the project.

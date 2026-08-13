@@ -34,6 +34,8 @@ public sealed class CobaltumOrmTransformTask : Task
     [Required]
     public string OutputDirectory { get; set; } = string.Empty;
 
+    public string? SuccessManifestPath { get; set; }
+
     public string? DefineConstants { get; set; }
 
     public string? LangVersion { get; set; }
@@ -54,7 +56,16 @@ public sealed class CobaltumOrmTransformTask : Task
     {
         try
         {
-            return Transform();
+            var succeeded = Transform();
+            if (succeeded && !string.IsNullOrWhiteSpace(SuccessManifestPath))
+            {
+                CobaltumOrmTransformManifest.WriteSuccessManifest(
+                    SuccessManifestPath!,
+                    ProcessedSources,
+                    TransformedSources);
+            }
+
+            return succeeded;
         }
         catch (Exception exception)
         {
