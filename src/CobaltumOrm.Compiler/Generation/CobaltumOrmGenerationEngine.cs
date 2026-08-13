@@ -63,6 +63,11 @@ public sealed class CobaltumOrmGenerationEngine
             return Failed();
         }
 
+        var analysisCache = new AnalysisCache(
+            request.AnalysisCacheDirectory,
+            dialect.Provider,
+            request.AnalysisCacheEnabled);
+
         var generatedNamespace = string.IsNullOrWhiteSpace(request.GeneratedNamespace)
             ? "CobaltumOrm.Generated"
             : request.GeneratedNamespace!.Trim();
@@ -129,7 +134,12 @@ public sealed class CobaltumOrmGenerationEngine
         var schemaCompilation = migrationTrees.Length == 0
             ? compilation
             : compilation.AddSyntaxTrees(migrationTrees);
-        var schemaBuild = CobaltumOrmGenerator.BuildSchema(schemaCompilation, additionalSql, dialect, AddRoslynDiagnostic);
+        var schemaBuild = CobaltumOrmGenerator.BuildSchema(
+            schemaCompilation,
+            additionalSql,
+            dialect,
+            analysisCache,
+            AddRoslynDiagnostic);
         if (schemaBuild.HasErrors)
         {
             return Failed();
@@ -146,7 +156,12 @@ public sealed class CobaltumOrmGenerationEngine
             sqlSchemaPath);
         compilation = compilation.AddSyntaxTrees(sqlSchemaTree);
 
-        var candidates = CollectCandidates(compilation, schemaBuild.Schema, sqlSchemaTree, dialect);
+        var candidates = CollectCandidates(
+            compilation,
+            schemaBuild.Schema,
+            sqlSchemaTree,
+            dialect,
+            analysisCache);
         if (_hasErrors)
         {
             return Failed();
@@ -234,6 +249,8 @@ public sealed class CobaltumOrmGenerationEngine
                 additionalSqlPaths.Concat(migrationSourcePaths).ToArray(),
                 generatedNamespace,
                 request.DatabaseProvider,
+                request.AnalysisCacheDirectory,
+                request.AnalysisCacheEnabled,
                 artifacts);
             if (_hasErrors)
             {
@@ -250,6 +267,8 @@ public sealed class CobaltumOrmGenerationEngine
         IReadOnlyList<string> additionalFilePaths,
         string generatedNamespace,
         string? databaseProvider,
+        string? analysisCacheDirectory,
+        bool analysisCacheEnabled,
         List<GeneratedArtifact> artifacts)
     {
         var additionalTexts = additionalFilePaths
@@ -258,7 +277,11 @@ public sealed class CobaltumOrmGenerationEngine
             .OrderBy(path => path, StringComparer.Ordinal)
             .Select(path => (AdditionalText)new FileAdditionalText(path, File.ReadAllText(path)))
             .ToImmutableArray();
-        var options = new GenerationConfigOptionsProvider(generatedNamespace, databaseProvider);
+        var options = new GenerationConfigOptionsProvider(
+            generatedNamespace,
+            databaseProvider,
+            analysisCacheDirectory,
+            analysisCacheEnabled);
         var driver = CSharpGeneratorDriver.Create(
             new[] { new CobaltumOrmGenerator().AsSourceGenerator() },
             additionalTexts,
@@ -314,7 +337,8 @@ public sealed class CobaltumOrmGenerationEngine
         CSharpCompilation compilation,
         DatabaseSchema schema,
         SyntaxTree sqlSchemaTree,
-        IDatabaseDialect dialect)
+        IDatabaseDialect dialect,
+        AnalysisCache analysisCache)
     {
         var pending = new List<PendingQuery>();
         foreach (var tree in compilation.SyntaxTrees.OrderBy(item => item.FilePath, StringComparer.Ordinal))
@@ -446,7 +470,7 @@ public sealed class CobaltumOrmGenerationEngine
                              statement.Kind == SqlStatementKind.DataManipulation))
                 {
                     var statementSql = TrimStatementTerminator(statement.Text);
-                    var commandAnalysis = dialect.QueryAnalyzer.Analyze(schema, statementSql);
+                    var commandAnalysis = analysisCache.AnalyzeQuery(schema, statementSql, dialect.QueryAnalyzer);
                     foreach (var diagnostic in commandAnalysis.Diagnostics)
                     {
                         AddSourceError(diagnostic.Code, diagnostic.Message, sqlExpression.GetLocation());
@@ -495,7 +519,7 @@ public sealed class CobaltumOrmGenerationEngine
                 }
 
                 var rowReturningSql = TrimStatementTerminator(rowReturningStatements[0].Text);
-                var analysis = dialect.QueryAnalyzer.Analyze(schema, rowReturningSql);
+                var analysis = analysisCache.AnalyzeQuery(schema, rowReturningSql, dialect.QueryAnalyzer);
                 if (analysis.HasErrors)
                 {
                     foreach (var diagnostic in analysis.Diagnostics)
@@ -1123,15 +1147,25 @@ public sealed class CobaltumOrmGenerationEngine
 
     private sealed class GenerationConfigOptionsProvider : AnalyzerConfigOptionsProvider
     {
-        internal GenerationConfigOptionsProvider(string generatedNamespace, string? databaseProvider)
+        internal GenerationConfigOptionsProvider(
+            string generatedNamespace,
+            string? databaseProvider,
+            string? analysisCacheDirectory,
+            bool analysisCacheEnabled)
         {
             var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["build_property.CobaltumOrmGeneratedNamespace"] = generatedNamespace,
+                ["build_property.CobaltumOrmAnalysisCache"] = analysisCacheEnabled ? "true" : "false",
             };
             if (!string.IsNullOrWhiteSpace(databaseProvider))
             {
                 values["build_property." + DatabaseDialects.ConfigurationPropertyName] = databaseProvider!.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(analysisCacheDirectory))
+            {
+                values["build_property._CobaltumOrmAnalysisCacheDirectory"] = analysisCacheDirectory!;
             }
 
             GlobalOptions = new GenerationConfigOptions(values);

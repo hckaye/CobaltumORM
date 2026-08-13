@@ -1,10 +1,13 @@
 <Project>
   <PropertyGroup>
     <CobaltumOrmDatabaseProvider Condition="'$(CobaltumOrmDatabaseProvider)' == ''">PostgreSql</CobaltumOrmDatabaseProvider>
+    <CobaltumOrmAnalysisCache Condition="'$(CobaltumOrmAnalysisCache)' == ''">true</CobaltumOrmAnalysisCache>
   </PropertyGroup>
 
   <ItemGroup>
     <CompilerVisibleProperty Include="CobaltumOrmDatabaseProvider" />
+    <CompilerVisibleProperty Include="CobaltumOrmAnalysisCache" />
+    <CompilerVisibleProperty Include="_CobaltumOrmAnalysisCacheDirectory" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -17,6 +20,24 @@
              AssemblyFile="$(CobaltumOrmCompilerTaskAssembly)" />
   <UsingTask TaskName="CobaltumOrm.Compiler.CobaltumOrmReadTransformManifestTask"
              AssemblyFile="$(CobaltumOrmCompilerTaskAssembly)" />
+
+  <Target Name="CobaltumOrmConfigureAnalysisCache"
+          BeforeTargets="GenerateMSBuildEditorConfigFileCore;CobaltumOrmCollectTransformInputs">
+    <PropertyGroup>
+      <CobaltumOrmIntermediateOutputPath Condition="'$(CobaltumOrmIntermediateOutputPath)' == ''">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'CobaltumOrm'))</CobaltumOrmIntermediateOutputPath>
+      <_CobaltumOrmAnalysisCacheDirectory>$([MSBuild]::NormalizePath('$(CobaltumOrmIntermediateOutputPath)', 'AnalysisCache'))</_CobaltumOrmAnalysisCacheDirectory>
+    </PropertyGroup>
+  </Target>
+
+  <Target Name="CobaltumOrmCleanAnalysisCache"
+          BeforeTargets="CoreClean"
+          DependsOnTargets="CobaltumOrmConfigureAnalysisCache">
+    <ItemGroup>
+      <Clean Include="$(_CobaltumOrmAnalysisCacheDirectory)/schema-*.xml" />
+      <Clean Include="$(_CobaltumOrmAnalysisCacheDirectory)/query-*.xml" />
+      <Clean Include="$(_CobaltumOrmAnalysisCacheDirectory)/*.tmp" />
+    </ItemGroup>
+  </Target>
 
   <Target Name="CobaltumOrmGetMigrationInputs"
           Returns="@(_CobaltumOrmMigrationInput)">
@@ -50,7 +71,7 @@
   </Target>
 
   <Target Name="CobaltumOrmCollectTransformInputs"
-          DependsOnTargets="ResolveReferences;CobaltumOrmResolveMigrationProjectInputs"
+          DependsOnTargets="ResolveReferences;CobaltumOrmResolveMigrationProjectInputs;CobaltumOrmConfigureAnalysisCache"
           Condition="'$(CobaltumOrmCompileTimeQueries)' != 'false'">
     <PropertyGroup>
       <CobaltumOrmIntermediateOutputPath Condition="'$(CobaltumOrmIntermediateOutputPath)' == ''">$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'CobaltumOrm'))</CobaltumOrmIntermediateOutputPath>
@@ -74,6 +95,8 @@
                                            Nullable="$(Nullable)"
                                            GeneratedNamespace="$(CobaltumOrmGeneratedNamespace)"
                                            CobaltumOrmDatabaseProvider="$(CobaltumOrmDatabaseProvider)"
+                                           CobaltumOrmAnalysisCache="$(CobaltumOrmAnalysisCache)"
+                                           AnalysisCacheDirectory="$(_CobaltumOrmAnalysisCacheDirectory)"
                                            CobaltumOrmCompileTimeQueries="$(CobaltumOrmCompileTimeQueries)"
                                            ProjectPath="$(MSBuildProjectFullPath)"
                                            TaskAssemblyPath="$(CobaltumOrmCompilerTaskAssembly)">
@@ -104,7 +127,9 @@
                               LangVersion="$(LangVersion)"
                               Nullable="$(Nullable)"
                               GeneratedNamespace="$(CobaltumOrmGeneratedNamespace)"
-                              CobaltumOrmDatabaseProvider="$(CobaltumOrmDatabaseProvider)" />
+                              CobaltumOrmDatabaseProvider="$(CobaltumOrmDatabaseProvider)"
+                              AnalysisCacheDirectory="$(_CobaltumOrmAnalysisCacheDirectory)"
+                              AnalysisCacheEnabled="$(CobaltumOrmAnalysisCache)" />
   </Target>
 
   <Target Name="CobaltumOrmRestoreTransformSources"

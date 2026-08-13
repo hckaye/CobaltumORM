@@ -39,6 +39,10 @@ public sealed class CobaltumOrmTransformTask : Task
 
     public string? CobaltumOrmDatabaseProvider { get; set; }
 
+    public string? AnalysisCacheDirectory { get; set; }
+
+    public bool AnalysisCacheEnabled { get; set; } = true;
+
     [Output]
     public ITaskItem[] ProcessedSources { get; private set; } = Array.Empty<ITaskItem>();
 
@@ -128,6 +132,8 @@ public sealed class CobaltumOrmTransformTask : Task
             Nullable = Nullable,
             GeneratedNamespace = GeneratedNamespace,
             DatabaseProvider = CobaltumOrmDatabaseProvider,
+            AnalysisCacheDirectory = AnalysisCacheDirectory,
+            AnalysisCacheEnabled = AnalysisCacheEnabled,
             IncludeGeneratorOutput = false,
         });
 

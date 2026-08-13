@@ -673,9 +673,21 @@ src/
 
 With this layout, editing application or UI code does not rebuild the query project, so SQL analysis does not run again. Run `cobaltum generate` when a migration or a query changes, and check the output directory in with the rest of the source if you use `--output-mode directory`.
 
-### Current limits
+### Analysis cache
 
-Every run analyzes the whole project. There is no result cache yet, so a run costs about as much as one full build of the query project. Reducing that cost is being worked on. Until then, the way to keep the cost off the normal edit cycle is the separate query project shown above.
+Normal builds and `cobaltum generate` use a local analysis cache by default. It stores the final successful database schema produced from the ordered migrations and successful SQL query analysis results, including result columns and parameters. It does not store generated C# or other build artifacts.
+
+Entries are written under `obj/<Configuration>/<TargetFramework>/CobaltumOrm/AnalysisCache`. `dotnet clean` removes them with the rest of `obj`. A missing, unreadable, corrupt, outdated, incomplete, or concurrently replaced entry is ignored without a warning, and CobaltumORM runs the normal analysis instead. Analysis errors are not cached.
+
+Set the following property when troubleshooting to disable reads and writes:
+
+```xml
+<PropertyGroup>
+  <CobaltumOrmAnalysisCache>false</CobaltumOrmAnalysisCache>
+</PropertyGroup>
+```
+
+A cache hit avoids applying the migrations again or running the SQL query parser and binder again. Roslyn compilation and symbol collection still run, as does mapping query results to C# types. C# edits can still invalidate the build even when the SQL and schema have not changed. For large applications with many queries, keep the query-library layout shown above so unrelated application changes do not rebuild the query project.
 
 ## Generated table types
 

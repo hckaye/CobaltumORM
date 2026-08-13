@@ -440,6 +440,10 @@ public sealed class CobaltumOrmCollectTransformInputsTask : Task
 
     public string? CobaltumOrmDatabaseProvider { get; set; }
 
+    public string? CobaltumOrmAnalysisCache { get; set; }
+
+    public string? AnalysisCacheDirectory { get; set; }
+
     public string? CobaltumOrmCompileTimeQueries { get; set; }
 
     public string? ProjectPath { get; set; }
@@ -485,6 +489,8 @@ public sealed class CobaltumOrmCollectTransformInputsTask : Task
                     new KeyValuePair<string, string?>("Nullable", Nullable),
                     new KeyValuePair<string, string?>("GeneratedNamespace", GeneratedNamespace),
                     new KeyValuePair<string, string?>("CobaltumOrmDatabaseProvider", CobaltumOrmDatabaseProvider),
+                    new KeyValuePair<string, string?>("CobaltumOrmAnalysisCache", CobaltumOrmAnalysisCache),
+                    new KeyValuePair<string, string?>("_CobaltumOrmAnalysisCacheDirectory", AnalysisCacheDirectory),
                     new KeyValuePair<string, string?>("CobaltumOrmCompileTimeQueries", CobaltumOrmCompileTimeQueries),
                     new KeyValuePair<string, string?>("ProjectPath", ProjectPath),
                     new KeyValuePair<string, string?>("TaskAssemblyPath", TaskAssemblyPath),

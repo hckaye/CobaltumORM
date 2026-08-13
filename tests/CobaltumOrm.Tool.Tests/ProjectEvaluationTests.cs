@@ -23,6 +23,8 @@ public sealed class ProjectEvaluationTests
             "defineconstants=TRACE;RELEASE;NET10_0",
             "databaseprovider=Sqlite",
             "generatednamespace=App.Database",
+            "analysiscache=false",
+            "analysiscachedirectory=/src/App/obj/Release/net10.0/CobaltumOrm/AnalysisCache",
             "compile=/src/App/Program.cs",
             "compile=/src/App/Queries.cs",
             "reference=/packages/CobaltumOrm.dll",
@@ -43,6 +45,10 @@ public sealed class ProjectEvaluationTests
         Assert.Equal("TRACE;RELEASE;NET10_0", evaluation.DefineConstants);
         Assert.Equal("Sqlite", evaluation.DatabaseProvider);
         Assert.Equal("App.Database", evaluation.GeneratedNamespace);
+        Assert.False(evaluation.AnalysisCacheEnabled);
+        Assert.Equal(
+            "/src/App/obj/Release/net10.0/CobaltumOrm/AnalysisCache",
+            evaluation.AnalysisCacheDirectory);
         Assert.Equal(
             new[] { "/src/App/Program.cs", "/src/App/Queries.cs" },
             evaluation.CompileFiles);
@@ -82,6 +88,7 @@ public sealed class ProjectEvaluationTests
         {
             "compile=", "reference=", "additionalfile=", "migrationsource=",
             "targetframework=", "defineconstants=", "databaseprovider=", "generatednamespace=",
+            "analysiscache=", "analysiscachedirectory=",
         })
         {
             Assert.Contains(key, targets, StringComparison.Ordinal);
