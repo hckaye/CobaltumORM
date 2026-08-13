@@ -24,6 +24,7 @@ compile-time SQL analysis support PostgreSQL, MySQL, SQLite, SQL Server, and Ora
 - [Project configuration](#project-configuration)
 - [Migration inputs](#migration-inputs)
 - [Command-line migration management](#command-line-migration-management)
+- [Explicit generation with the CLI](#explicit-generation-with-the-cli)
 - [Generated table types](#generated-table-types)
 - [Named queries](#named-queries)
 - [Result types for constant `Query` SQL](#result-types-for-constant-query-sql)
@@ -562,6 +563,133 @@ var rows = await UserQueries.ReadAllAsync(database.Connection);
 ```
 
 `MigrationProjectConnection` uses the same configuration order and the same `DatabaseMigrationProject.CreateConnection` implementation as the CLI. It owns both the loaded configuration and the connection; disposing it disposes both. Environment selection continues to use the standard `DOTNET_ENVIRONMENT` setting. The generated migration project copies its `appsettings*.json` files to a project-specific directory for consuming applications, so they do not replace the application's own settings files.
+
+## Explicit generation with the CLI
+
+The incremental source generator runs inside every build and is the default. It needs no extra configuration and suits most projects.
+
+`cobaltum generate` is a second way to get the same files. It writes them to disk before the build, in the way `protoc` and `Grpc.Tools` write generated C# ahead of compilation. Consider it when one of these applies:
+
+- The schema changes rarely and the generated code can be checked in and reviewed.
+- The project is large enough that analyzing every build costs more than analyzing when the schema changes.
+- The build environment cannot load source generators.
+
+The command runs the same SQL analysis, schema construction, diagnostics, `Query` transformation, and code writers as the build. Both paths call one implementation, so the files the command writes are the files the build would have produced.
+
+### Command
+
+```
+cobaltum generate [--project <path>] [--configuration <name>] [--framework <tfm>]
+                  [--provider <name>] [--generated-namespace <namespace>]
+                  [--output-mode intermediate|directory|library]
+                  [--output <directory>] [--library-project <path>] [--library-name <name>]
+                  [--no-restore] [--verbose]
+```
+
+The command asks MSBuild for the evaluated `Compile` items, resolved references, `AdditionalFiles`, migration project inputs, and compiler properties, so it reads the same inputs as the build instead of parsing the project file itself. It never writes to your `.csproj`.
+
+`--configuration` defaults to `Debug`. Pass `--framework` when the project targets more than one framework. `--provider` and `--generated-namespace` are needed only when the project does not set `CobaltumOrmDatabaseProvider` and `CobaltumOrmGeneratedNamespace`, or when you want to override them.
+
+Each run writes the generator output, a rewritten copy of every source file that contains a `Query` call, a `CobaltumOrm.Generated.props` file that tells MSBuild which files to compile, and a `CobaltumOrm.generated.manifest` file that lists what the tool wrote. The next run removes only the files recorded in that manifest, so other files in the output directory are left alone. Files are written to a staging directory first: when analysis reports an error, the command prints the file, line, and diagnostic code, exits with a nonzero code, and leaves the previous output untouched.
+
+### Output modes
+
+`--output-mode intermediate` is the default. It writes to `obj/<Configuration>/<TargetFramework>/CobaltumOrmGenerated/` and is meant for generated code that is not checked in. Import the props file from the project:
+
+```xml
+<Import Project="obj/$(Configuration)/$(TargetFramework)/CobaltumOrmGenerated/CobaltumOrm.Generated.props"
+        Condition="Exists('obj/$(Configuration)/$(TargetFramework)/CobaltumOrmGenerated/CobaltumOrm.Generated.props')" />
+```
+
+`--output-mode directory` writes to a durable directory that you choose and can check in:
+
+```
+cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj --output-mode directory --output src/MyApp.Queries/Generated
+```
+
+```xml
+<Import Project="Generated/CobaltumOrm.Generated.props" />
+```
+
+The props file sets `CobaltumOrmCompileTimeQueries` to `false`, removes the original sources that were rewritten from `Compile`, adds the generated files, and removes the CobaltumORM analyzer from the compilation. The directory must not contain the project directory, so pass a subdirectory or a directory outside the project.
+
+`--output-mode library` writes a directory that compiles as its own C# library. With `--library-name`, the tool writes the `.csproj` as well:
+
+```
+cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj \
+  --output-mode library --output src/MyApp.Queries.Generated --library-name MyApp.Queries.Generated
+```
+
+The written project sets `EnableDefaultCompileItems` to `false`, imports the props file, and compiles the generated files, the rewritten sources, and the sources that were not rewritten. Its references are the resolved reference list of the source project, written as `HintPath` values that point at package and output directories on the machine that ran the command. A project written by `--library-name` therefore belongs to that machine. Regenerate it there instead of checking it in and building it somewhere else.
+
+For a library project that you keep in source control and build anywhere, use `--library-project`. The destination is a `.csproj` you already own, where you declare references as normal `PackageReference` and `ProjectReference` entries. The tool writes the generated files and the props file next to it and does not modify it. Add these lines yourself:
+
+```xml
+<PropertyGroup>
+  <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+</PropertyGroup>
+<Import Project="CobaltumOrm.Generated.props" />
+```
+
+### Separating the query project
+
+Explicit generation works best when the code that talks to the database lives in its own project. Put the `[Query]` containers, the `Query` call sites, and the migration reference in a query project, and let the application project reference it:
+
+Build-time optimization is ongoing. In the [2026-08-13 benchmark](benchmarks/CobaltumOrm.BuildBenchmarks/README.md#results-from-2026-08-13), a project with 1,000 `[Query]` declarations and 1,000 `Query(...)` methods took 1.1 seconds for a no-change build. A clean build took 11.9 seconds, and a build after changing one C# file without a query took 8.5 seconds. Projects with many queries should use a separate query project so unrelated application changes do not repeat the analysis.
+
+```
+src/
+  MyApp.Database/          migration project
+  MyApp.Queries/           [Query] containers and Query calls
+  MyApp/                   application and UI
+```
+
+```xml
+<!-- src/MyApp.Queries/MyApp.Queries.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <CobaltumOrmGeneratedNamespace>MyApp.Database</CobaltumOrmGeneratedNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CobaltumOrm" Version="runtime-version" />
+    <PackageReference Include="CobaltumOrm.Migrations" Version="migrations-version" />
+    <PackageReference Include="CobaltumOrm.SourceGenerator"
+                      Version="generator-version"
+                      PrivateAssets="all" />
+    <CobaltumOrmMigrationProjectReference Include="../MyApp.Database/MyApp.Database.csproj" />
+    <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
+  </ItemGroup>
+
+  <Import Project="Generated/CobaltumOrm.Generated.props" />
+</Project>
+```
+
+```xml
+<!-- src/MyApp/MyApp.csproj -->
+<ItemGroup>
+  <ProjectReference Include="../MyApp.Queries/MyApp.Queries.csproj" />
+</ItemGroup>
+```
+
+With this layout, editing application or UI code does not rebuild the query project, so SQL analysis does not run again. Run `cobaltum generate` when a migration or a query changes, and check the output directory in with the rest of the source if you use `--output-mode directory`.
+
+### Analysis cache
+
+Normal builds and `cobaltum generate` use a local analysis cache by default. It stores the final successful database schema produced from the ordered migrations and successful SQL query analysis results, including result columns and parameters. It does not store generated C# or other build artifacts.
+
+Entries are written under `obj/<Configuration>/<TargetFramework>/CobaltumOrm/AnalysisCache`. `dotnet clean` removes them with the rest of `obj`. A missing, unreadable, corrupt, outdated, incomplete, or concurrently replaced entry is ignored without a warning, and CobaltumORM runs the normal analysis instead. Analysis errors are not cached.
+
+Set the following property when troubleshooting to disable reads and writes:
+
+```xml
+<PropertyGroup>
+  <CobaltumOrmAnalysisCache>false</CobaltumOrmAnalysisCache>
+</PropertyGroup>
+```
+
+A cache hit avoids applying the migrations again or running the SQL query parser and binder again. Roslyn compilation and symbol collection still run, as does mapping query results to C# types. C# edits can still invalidate the build even when the SQL and schema have not changed. For large applications with many queries, keep the query-library layout shown above so unrelated application changes do not rebuild the query project.
 
 ## Generated table types
 

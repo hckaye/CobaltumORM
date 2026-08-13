@@ -23,6 +23,7 @@ CobaltumORM は PostgreSQL を主な対象とする .NET / C# 向け ORM です�
 - [プロジェクト設定](#プロジェクト設定)
 - [マイグレーションの入力](#マイグレーションの入力)
 - [CLI によるマイグレーション管理](#cli-によるマイグレーション管理)
+- [CLI による明示的なコード生成](#cli-による明示的なコード生成)
 - [生成されるテーブル型](#生成されるテーブル型)
 - [名前付きクエリ](#名前付きクエリ)
 - [内容がコンパイル時に決まる `Query` の結果型](#内容がコンパイル時に決まる-query-の結果型)
@@ -562,6 +563,133 @@ var rows = await UserQueries.ReadAllAsync(database.Connection);
 ```
 
 `MigrationProjectConnection` は、CLI と同じ優先順位で設定を読み、同じ `DatabaseMigrationProject.CreateConnection` を呼びます。このオブジェクトを破棄すると、接続と読み込んだ設定の両方が破棄されます。環境の選択には .NET 標準の `DOTNET_ENVIRONMENT` を使います。生成されたマイグレーションプロジェクトでは `appsettings*.json` をプロジェクトごとの専用ディレクトリへコピーするため、アプリケーション自身の設定ファイルを置き換えることはありません。
+
+## CLI による明示的なコード生成
+
+コード生成は、ビルドのたびに動くインクリメンタルソースジェネレーターが既定です。追加の設定は不要で、ほとんどのプロジェクトではこちらを使ってください。
+
+`cobaltum generate` は、同じファイルを得るためのもう一つの方法です。`protoc` や `Grpc.Tools` がコンパイル前に C# を生成するのと同じように、ビルドより前にファイルを書き出します。次のいずれかに当てはまる場合に検討してください。
+
+- スキーマの変更頻度が低く、生成コードをリポジトリに入れてレビューしたい。
+- プロジェクトが大きく、毎回のビルドで解析するコストが、スキーマ変更時だけ解析するコストを上回る。
+- ビルド環境でソースジェネレーターを読み込めない。
+
+このコマンドは、ビルド時と同じ SQL 解析、スキーマ構築、診断、`Query` の変換、コード出力を実行します。両方の経路が同一の実装を呼ぶため、コマンドが書き出すファイルはビルドが生成するファイルと同じです。
+
+### コマンド
+
+```
+cobaltum generate [--project <path>] [--configuration <name>] [--framework <tfm>]
+                  [--provider <name>] [--generated-namespace <namespace>]
+                  [--output-mode intermediate|directory|library]
+                  [--output <directory>] [--library-project <path>] [--library-name <name>]
+                  [--no-restore] [--verbose]
+```
+
+評価済みの `Compile` 項目、解決済みの参照、`AdditionalFiles`、マイグレーションプロジェクトの入力、コンパイラのプロパティは MSBuild から取得します。csproj の条件を独自に解釈することはありません。csproj への書き込みも行いません。
+
+`--configuration` の既定値は `Debug` です。複数のターゲットフレームワークを持つプロジェクトでは `--framework` を指定してください。`--provider` と `--generated-namespace` は、プロジェクトが `CobaltumOrmDatabaseProvider` と `CobaltumOrmGeneratedNamespace` を設定していない場合、またはその値を上書きしたい場合にだけ必要です。
+
+1 回の実行で、ジェネレーターの出力、`Query` 呼び出しを含むソースを書き換えたファイル、コンパイル対象を MSBuild へ伝える `CobaltumOrm.Generated.props`、ツールが書いたファイルの一覧である `CobaltumOrm.generated.manifest` を出力します。次回の実行で削除するのはこのマニフェストに記録されたファイルだけなので、出力ディレクトリに置いた他のファイルはそのまま残ります。ファイルはいったんステージング用のディレクトリに書き出します。解析でエラーが出た場合はファイル名、行、診断コードを表示し、ゼロ以外の終了コードで終了して、前回の出力には手を付けません。
+
+### 出力モード
+
+`--output-mode intermediate` が既定です。`obj/<Configuration>/<TargetFramework>/CobaltumOrmGenerated/` に書き出します。生成コードをリポジトリに入れない場合に使います。プロジェクトから props ファイルを読み込んでください。
+
+```xml
+<Import Project="obj/$(Configuration)/$(TargetFramework)/CobaltumOrmGenerated/CobaltumOrm.Generated.props"
+        Condition="Exists('obj/$(Configuration)/$(TargetFramework)/CobaltumOrmGenerated/CobaltumOrm.Generated.props')" />
+```
+
+`--output-mode directory` は、指定した固定のディレクトリに書き出します。リポジトリに入れる用途に向いています。
+
+```
+cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj --output-mode directory --output src/MyApp.Queries/Generated
+```
+
+```xml
+<Import Project="Generated/CobaltumOrm.Generated.props" />
+```
+
+props ファイルは `CobaltumOrmCompileTimeQueries` を `false` にし、書き換え元になったソースを `Compile` から除外し、生成ファイルを追加し、CobaltumORM のアナライザーをコンパイルから外します。出力ディレクトリにプロジェクトディレクトリを含めることはできません。プロジェクト配下のサブディレクトリか、プロジェクトの外にあるディレクトリを指定してください。
+
+`--output-mode library` は、それ自体が C# ライブラリとしてビルドできるディレクトリを書き出します。`--library-name` を指定すると `.csproj` もツールが書き出します。
+
+```
+cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj \
+  --output-mode library --output src/MyApp.Queries.Generated --library-name MyApp.Queries.Generated
+```
+
+書き出される csproj は `EnableDefaultCompileItems` を `false` にし、props ファイルを読み込み、生成ファイル、書き換え後のソース、書き換えの対象にならなかったソースをコンパイルします。参照は、元のプロジェクトで解決された参照一覧を `HintPath` として書き出します。この `HintPath` はコマンドを実行した環境のパッケージディレクトリや出力ディレクトリを指すため、`--library-name` で書き出した csproj はその環境専用です。リポジトリに入れて別の環境でビルドするのではなく、その環境で生成し直してください。
+
+ソース管理に入れてどの環境でもビルドできるライブラリプロジェクトが必要な場合は `--library-project` を使います。出力先は利用者が所有する既存の csproj で、参照は通常どおり `PackageReference` と `ProjectReference` で記述します。ツールは生成ファイルと props ファイルをその隣に書き出すだけで、csproj は変更しません。次の記述は利用者が追加してください。
+
+```xml
+<PropertyGroup>
+  <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+</PropertyGroup>
+<Import Project="CobaltumOrm.Generated.props" />
+```
+
+### Query プロジェクトを分ける構成
+
+明示的な生成は、データベースを扱うコードを専用のプロジェクトに分けたときに最も効果があります。`[Query]` を付けたクラス、`Query` の呼び出し、マイグレーションの参照を Query プロジェクトにまとめ、アプリケーションプロジェクトからそれを参照します。
+
+ビルド時間の最適化は継続しています。[2026-08-13 のベンチマーク](benchmarks/CobaltumOrm.BuildBenchmarks/README.ja.md#2026-08-13-の測定結果)では、`[Query]` と `Query(...)` を 1,000 件ずつ持つプロジェクトの変更なしビルドは 1.1 秒でした。一方、clean build は 11.9 秒、クエリを含まない C# ファイルを 1 個変更したビルドは 8.5 秒です。クエリを多く持つ場合は、関係のないアプリケーションコードの変更で解析をやり直さないように Query プロジェクトを分けてください。
+
+```
+src/
+  MyApp.Database/          マイグレーションプロジェクト
+  MyApp.Queries/           [Query] と Query 呼び出し
+  MyApp/                   アプリケーションと UI
+```
+
+```xml
+<!-- src/MyApp.Queries/MyApp.Queries.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <CobaltumOrmGeneratedNamespace>MyApp.Database</CobaltumOrmGeneratedNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CobaltumOrm" Version="runtime-version" />
+    <PackageReference Include="CobaltumOrm.Migrations" Version="migrations-version" />
+    <PackageReference Include="CobaltumOrm.SourceGenerator"
+                      Version="generator-version"
+                      PrivateAssets="all" />
+    <CobaltumOrmMigrationProjectReference Include="../MyApp.Database/MyApp.Database.csproj" />
+    <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
+  </ItemGroup>
+
+  <Import Project="Generated/CobaltumOrm.Generated.props" />
+</Project>
+```
+
+```xml
+<!-- src/MyApp/MyApp.csproj -->
+<ItemGroup>
+  <ProjectReference Include="../MyApp.Queries/MyApp.Queries.csproj" />
+</ItemGroup>
+```
+
+この構成では、アプリケーションや UI のコードを編集しても Query プロジェクトはリビルドされないため、SQL の解析も再実行されません。マイグレーションかクエリを変更したときに `cobaltum generate` を実行してください。`--output-mode directory` を使う場合は、出力ディレクトリを他のソースと一緒にコミットします。
+
+### 解析キャッシュ
+
+通常のビルドと `cobaltum generate` では、ローカルの解析キャッシュが既定で有効です。順番に適用したマイグレーションから得られた最終スキーマと、正常に完了した SQL クエリ解析の結果を保存します。クエリ解析の結果には返却列とパラメーターが含まれます。生成された C# やその他のビルド成果物は保存しません。
+
+キャッシュは `obj/<Configuration>/<TargetFramework>/CobaltumOrm/AnalysisCache` に保存され、`dotnet clean` で `obj` と一緒に削除されます。エントリが存在しない、読み取れない、壊れている、古い形式である、書き込み途中である、または別のコンパイラープロセスによって同時に置き換えられた場合は、警告を出さずに通常の解析を実行します。解析エラーはキャッシュしません。
+
+問題の調査中にキャッシュの読み書きを無効にする場合は、次のプロパティを設定します。
+
+```xml
+<PropertyGroup>
+  <CobaltumOrmAnalysisCache>false</CobaltumOrmAnalysisCache>
+</PropertyGroup>
+```
+
+キャッシュが使われると、マイグレーションの再適用と SQL クエリのパーサーおよびバインダーの再実行を省略します。Roslyn のコンパイルとシンボル収集、クエリ結果から C# 型へのマッピングは毎回実行します。SQL とスキーマが変わっていなくても、C# の編集によってビルドが再実行されることがあります。クエリが多い大規模なアプリケーションでは、関係のないアプリケーションコードの変更で Query プロジェクトを再ビルドしないように、上記の Query ライブラリ構成を使ってください。
 
 ## 生成されるテーブル型
 

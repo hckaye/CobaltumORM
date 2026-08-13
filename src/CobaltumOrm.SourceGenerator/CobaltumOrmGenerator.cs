@@ -73,6 +73,8 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
             return;
         }
 
+        var analysisCache = GetAnalysisCache(options, dialect);
+
         var generatedNamespace = GetGeneratedNamespace(options);
         if (!IsValidNamespace(generatedNamespace))
         {
@@ -84,7 +86,7 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
         }
 
         var schemaCompilation = AddExternalMigrationTrees(compilation, migrationFiles);
-        var schemaBuild = BuildSchema(schemaCompilation, sqlFiles, dialect, Report);
+        var schemaBuild = BuildSchema(schemaCompilation, sqlFiles, dialect, analysisCache, Report);
         var migrations = schemaBuild.Migrations;
         var schema = schemaBuild.Schema;
 
@@ -117,7 +119,7 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                 continue;
             }
 
-            var analysis = dialect.QueryAnalyzer.Analyze(schema, query.Sql);
+            var analysis = analysisCache.AnalyzeQuery(schema, query.Sql, dialect.QueryAnalyzer);
             foreach (var diagnostic in analysis.Diagnostics)
             {
                 Report(RoslynDiagnostic.Create(
@@ -149,7 +151,7 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
             }
         }
 
-        ValidateRawQueries(compilation, schema, dialect, Report);
+        ValidateRawQueries(compilation, schema, dialect, analysisCache, Report);
 
         if (schemaBuild.HasErrors)
         {
@@ -181,7 +183,8 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                         generatedNamespace,
                         schema,
                         compilation,
-                        dialect),
+                        dialect,
+                        analysisCache),
                     System.Text.Encoding.UTF8));
         }
 
@@ -243,6 +246,7 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
         Compilation compilation,
         ImmutableArray<AdditionalSqlFile> sqlFiles,
         IDatabaseDialect dialect,
+        AnalysisCache analysisCache,
         Action<RoslynDiagnostic> report)
     {
         var schemaHasErrors = false;
@@ -256,60 +260,92 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
         migrations.AddRange(CollectFlywayMigrations(sqlFiles, ReportSchema));
         ValidateMigrationVersions(migrations, ReportSchema);
 
-        var schema = new DatabaseSchema(Array.Empty<Table>());
-        foreach (var migration in migrations.OrderBy(item => item.Version).ThenBy(item => item.Description, StringComparer.Ordinal))
+        var orderedMigrations = migrations
+            .OrderBy(item => item.Version)
+            .ThenBy(item => item.Description, StringComparer.Ordinal)
+            .ToArray();
+        DatabaseSchema ApplyMigrations()
         {
-            foreach (var step in migration.Steps)
+            var appliedSchema = new DatabaseSchema(Array.Empty<Table>());
+            foreach (var migration in orderedMigrations)
             {
-                var statements = dialect.ScriptClassifier.SplitAndClassify(step.Sql, out var scriptError);
-                if (scriptError != null)
+                foreach (var step in migration.Steps)
                 {
-                    ReportSchema(RoslynDiagnostic.Create(
-                        GeneratorDiagnostics.SchemaSql,
-                        MigrationSqlLocation(migration, step, scriptError.Span),
-                        "DDL300",
-                        scriptError.Message));
-                }
-
-                foreach (var statement in statements)
-                {
-                    if (statement.Kind == SqlStatementKind.Empty ||
-                        statement.Kind == SqlStatementKind.Select ||
-                        statement.Kind == SqlStatementKind.DataManipulation ||
-                        statement.Kind == SqlStatementKind.SchemaNeutral)
-                    {
-                        continue;
-                    }
-
-                    if (statement.Kind == SqlStatementKind.Unsupported)
+                    var statements = dialect.ScriptClassifier.SplitAndClassify(step.Sql, out var scriptError);
+                    if (scriptError != null)
                     {
                         ReportSchema(RoslynDiagnostic.Create(
                             GeneratorDiagnostics.SchemaSql,
-                            MigrationSqlLocation(migration, step, statement.Span),
+                            MigrationSqlLocation(migration, step, scriptError.Span),
                             "DDL300",
-                            "This migration statement may change the queryable schema and is not supported by compile-time analysis."));
-                        continue;
+                            scriptError.Message));
                     }
 
-                    var result = dialect.SchemaMigrationAnalyzer.Analyze(schema, statement.Text);
-                    foreach (var diagnostic in result.Diagnostics)
+                    foreach (var statement in statements)
                     {
-                        var span = new SourceSpan(
-                            statement.Span.Start + diagnostic.Span.Start,
-                            diagnostic.Span.Length);
-                        ReportSchema(RoslynDiagnostic.Create(
-                            GeneratorDiagnostics.SchemaSql,
-                            MigrationSqlLocation(migration, step, span),
-                            diagnostic.Code,
-                            diagnostic.Message));
-                    }
+                        if (statement.Kind == SqlStatementKind.Empty ||
+                            statement.Kind == SqlStatementKind.Select ||
+                            statement.Kind == SqlStatementKind.DataManipulation ||
+                            statement.Kind == SqlStatementKind.SchemaNeutral)
+                        {
+                            continue;
+                        }
 
-                    if (!result.HasErrors)
-                    {
-                        schema = result.Schema;
+                        if (statement.Kind == SqlStatementKind.Unsupported)
+                        {
+                            ReportSchema(RoslynDiagnostic.Create(
+                                GeneratorDiagnostics.SchemaSql,
+                                MigrationSqlLocation(migration, step, statement.Span),
+                                "DDL300",
+                                "This migration statement may change the queryable schema and is not supported by compile-time analysis."));
+                            continue;
+                        }
+
+                        var result = dialect.SchemaMigrationAnalyzer.Analyze(appliedSchema, statement.Text);
+                        foreach (var diagnostic in result.Diagnostics)
+                        {
+                            var span = new SourceSpan(
+                                statement.Span.Start + diagnostic.Span.Start,
+                                diagnostic.Span.Length);
+                            ReportSchema(RoslynDiagnostic.Create(
+                                GeneratorDiagnostics.SchemaSql,
+                                MigrationSqlLocation(migration, step, span),
+                                diagnostic.Code,
+                                diagnostic.Message));
+                        }
+
+                        if (!result.HasErrors)
+                        {
+                            appliedSchema = result.Schema;
+                        }
                     }
                 }
             }
+
+            return appliedSchema;
+        }
+
+        var schema = new DatabaseSchema(Array.Empty<Table>());
+        if (schemaHasErrors)
+        {
+            schema = ApplyMigrations();
+        }
+        else
+        {
+            var semanticMigrations = orderedMigrations
+                .Select(migration => new SemanticMigrationInput(
+                    migration.Version,
+                    migration.Description,
+                    migration.Steps.Select(step => step.Sql)))
+                .ToArray();
+            schema = analysisCache.GetOrAnalyzeSchema(
+                semanticMigrations,
+                () =>
+                {
+                    var analyzedSchema = ApplyMigrations();
+                    return new CacheComputation<DatabaseSchema>(analyzedSchema, !schemaHasErrors);
+                },
+                out _);
         }
 
         return new CompilationSchemaResult(schema, migrations, schemaHasErrors);
@@ -591,6 +627,7 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
         Compilation compilation,
         DatabaseSchema schema,
         IDatabaseDialect dialect,
+        AnalysisCache analysisCache,
         Action<RoslynDiagnostic> report)
     {
         foreach (var syntaxTree in compilation.SyntaxTrees)
@@ -668,7 +705,7 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                         statementSql = statementSql.Substring(0, statementSql.Length - 1);
                     }
 
-                    var analysis = dialect.QueryAnalyzer.Analyze(schema, statementSql);
+                    var analysis = analysisCache.AnalyzeQuery(schema, statementSql, dialect.QueryAnalyzer);
                     foreach (var diagnostic in analysis.Diagnostics)
                     {
                         report(RoslynDiagnostic.Create(
@@ -768,6 +805,22 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
             Location.None,
             error ?? "The database provider configuration is invalid."));
         return null;
+    }
+
+    private static AnalysisCache GetAnalysisCache(
+        Microsoft.CodeAnalysis.Diagnostics.AnalyzerConfigOptionsProvider options,
+        IDatabaseDialect dialect)
+    {
+        var enabled = !options.GlobalOptions.TryGetValue(
+                "build_property.CobaltumOrmAnalysisCache",
+                out var enabledValue) ||
+            !string.Equals(enabledValue?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+        var directory = options.GlobalOptions.TryGetValue(
+            "build_property._CobaltumOrmAnalysisCacheDirectory",
+            out var directoryValue)
+            ? directoryValue
+            : null;
+        return new AnalysisCache(directory, dialect.Provider, enabled);
     }
 
     private static bool IsMigrationType(INamedTypeSymbol symbol, INamedTypeSymbol migrationBaseType)
