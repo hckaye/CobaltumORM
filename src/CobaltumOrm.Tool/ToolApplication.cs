@@ -79,12 +79,14 @@ internal sealed class ToolApplication
                 options.SettingsPath = Path.GetFullPath(options.SettingsPath, _currentDirectory);
             }
 
-            if (options.Command == "schema")
+            var projectPath = ResolveProject(options.Project);
+            if (options.Command == "schema" || options.WriteSchema)
             {
-                options.Output = Path.GetFullPath(options.Output!, _currentDirectory);
+                options.Output = options.Output is null
+                    ? Path.Combine(Path.GetDirectoryName(projectPath)!, "schema.generated.json")
+                    : Path.GetFullPath(options.Output, _currentDirectory);
             }
 
-            var projectPath = ResolveProject(options.Project);
             if (options.Command == "add")
             {
                 new MigrationScaffolder(_output).Add(projectPath, options.Positionals[0], options.Version);
@@ -181,6 +183,10 @@ internal sealed class ToolApplication
                     options.DryRun = true;
                     break;
 
+                case "--write-schema":
+                    options.WriteSchema = true;
+                    break;
+
                 default:
                     if (args[index].StartsWith("-", StringComparison.Ordinal))
                     {
@@ -207,7 +213,7 @@ internal sealed class ToolApplication
 
             if (options.Project is not null || options.ConfigurationSpecified ||
                 options.EnvironmentName is not null || options.SettingsPath is not null ||
-                options.Version.HasValue || options.NoBuild || options.DryRun)
+                options.Version.HasValue || options.NoBuild || options.DryRun || options.WriteSchema)
             {
                 throw new ToolUsageException(
                     "The init command only accepts --output, --framework, and --provider.");
@@ -247,14 +253,16 @@ internal sealed class ToolApplication
             throw new ToolUsageException("--version can only be used with migrations add.");
         }
 
-        if (options.Command == "schema" && options.Output is null)
+        if (options.Output is not null && options.Command != "schema" &&
+            !(options.Command == "up" && options.WriteSchema))
         {
-            throw new ToolUsageException("The schema command requires --output <path>.");
+            throw new ToolUsageException(
+                "--output can only be used with migrations init, migrations schema, or migrations up --write-schema.");
         }
 
-        if (options.Output is not null && options.Command != "schema")
+        if (options.WriteSchema && options.Command != "up")
         {
-            throw new ToolUsageException("--output can only be used with migrations init and migrations schema.");
+            throw new ToolUsageException("--write-schema can only be used with migrations up.");
         }
 
         if (options.Command == "add" && (options.NoBuild || options.Framework is not null))
@@ -413,6 +421,11 @@ internal sealed class ToolApplication
             startInfo.ArgumentList.Add("--dry-run");
         }
 
+        if (options.WriteSchema)
+        {
+            startInfo.ArgumentList.Add("--write-schema");
+        }
+
         return startInfo;
     }
 
@@ -429,12 +442,13 @@ internal sealed class ToolApplication
         writer.WriteLine("  cobaltum migrations add <name> [--version <number>] [--project <path>]");
         writer.WriteLine("  cobaltum migrations list [--project <path>]");
         writer.WriteLine("  cobaltum migrations status [--project <path>]");
-        writer.WriteLine("  cobaltum migrations schema --output <path> [--project <path>]");
-        writer.WriteLine("  cobaltum migrations up [--dry-run] [--project <path>]");
+        writer.WriteLine("  cobaltum migrations schema [--output <path>] [--project <path>]");
+        writer.WriteLine("  cobaltum migrations up [--dry-run] [--write-schema] [--output <path>] [--project <path>]");
         writer.WriteLine("  cobaltum migrations down <target-version> [--dry-run] [--project <path>]");
         writer.WriteLine();
         writer.WriteLine("Options:");
-        writer.WriteLine("  -o, --output <path>         Output directory for init or schema file for schema");
+        writer.WriteLine("  -o, --output <path>         Output directory for init or JSON file for schema");
+        writer.WriteLine("                             schema defaults to schema.generated.json in the migration project");
         writer.WriteLine("  -p, --project <path>        Migration .csproj file or its directory");
         writer.WriteLine("  -c, --configuration <name> Build configuration (default: Debug)");
         writer.WriteLine("  -f, --framework <tfm>      Target framework for init or dotnet run");
@@ -444,6 +458,7 @@ internal sealed class ToolApplication
         writer.WriteLine("      --settings <path>      JSON settings file used instead of appsettings files");
         writer.WriteLine("      --no-build             Do not build the migration project");
         writer.WriteLine("      --dry-run              Show migration files, SQL, and final schema without changes");
+        writer.WriteLine("      --write-schema         Write final schema JSON after migrations up");
         writer.WriteLine("      --version <number>     Version for a new migration");
         writer.WriteLine();
         writer.WriteLine("Generate options:");
@@ -495,6 +510,8 @@ internal sealed class ToolOptions
     public bool NoBuild { get; set; }
 
     public bool DryRun { get; set; }
+
+    public bool WriteSchema { get; set; }
 }
 
 internal sealed class ToolUsageException : Exception

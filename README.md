@@ -515,9 +515,10 @@ When `--project` is omitted, the tool recursively searches the current directory
 cobaltum migrations init MyApp.Database --output src/MyApp.Database --provider PostgreSql
 cobaltum migrations add "create users" --project src/MyApp.Database
 cobaltum migrations list --project src/MyApp.Database
-cobaltum migrations schema --output artifacts/schema.txt --project src/MyApp.Database
+cobaltum migrations schema --project src/MyApp.Database
 cobaltum migrations status --project src/MyApp.Database
 cobaltum migrations up --project src/MyApp.Database
+cobaltum migrations up --write-schema --project src/MyApp.Database
 cobaltum migrations up --dry-run --project src/MyApp.Database
 cobaltum migrations down 20260810090000 --project src/MyApp.Database
 cobaltum migrations down 20260810090000 --dry-run --project src/MyApp.Database
@@ -526,7 +527,31 @@ cobaltum migrations down 0 --project src/MyApp.Database
 
 `init` creates the fixed migration project and uses the project name as its root namespace. `add` creates a reversible C# migration in the project's `Migrations` directory. Its default version is a UTC timestamp; use `--version` to supply a positive version greater than every existing C# or Flyway-compatible migration. `list` builds the project and lists migration definitions without opening a database connection. `status`, `up`, and `down` run with the migration project's target framework and configuration. Use `--configuration`, `--framework`, and `--no-build` when a non-default build is needed. `down 0` rolls back all reversible migrations. A rollback containing a forward-only migration is rejected before any rollback starts.
 
-`schema` applies every migration's `Up` definition to an empty in-memory schema and writes the resulting tables and columns to a UTF-8 text file. It does not connect to a database or load a connection string. Parent directories are created when needed, and an existing output file is replaced. The file is a schema description for inspection and review, not an executable SQL script.
+`schema` applies every migration's `Up` definition to an empty in-memory schema and writes the resulting tables and columns as UTF-8 JSON. It does not connect to a database or load a connection string. The default output is `schema.generated.json` in the migration project directory. `--output` selects another path. Parent directories are created when needed, and an existing output file is replaced. The JSON uses two-space indentation, preserves Unicode identifiers and expressions, and keeps table and property order stable for reviewable diffs. `formatVersion` identifies the JSON contract. `schema` and `defaultExpression` are JSON `null` when they have no value.
+
+```json
+{
+  "formatVersion": 1,
+  "tables": [
+    {
+      "schema": "public",
+      "name": "users",
+      "columns": [
+        {
+          "name": "id",
+          "sqlType": "bigint",
+          "nullable": false,
+          "primaryKey": true,
+          "identity": true,
+          "defaultExpression": null
+        }
+      ]
+    }
+  ]
+}
+```
+
+Add `--write-schema` to `up` to write the same JSON after the migrations complete successfully. `--output` changes its path. When combined with `--dry-run`, the database is not changed and the file contains the schema expected after the planned migrations.
 
 Add `--dry-run` to `up` or `down` to print each affected file under `Migrations`, the SQL that would run, and the resulting tables and columns. The command connects to the selected database only to read its migration history. It does not create the history table, execute migration SQL, or update migration history. The final schema is reconstructed from the migration definitions, using the selected provider's supported table operations as build-time schema generation. The command fails instead of showing an incomplete schema when a migration contains an unsupported statement that may change table structure.
 

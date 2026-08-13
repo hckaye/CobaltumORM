@@ -5,7 +5,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -98,19 +99,7 @@ public static class MigrationProjectHost
         if (hostCommand.Name == "schema")
         {
             var schema = new MigrationRunner(adapter).BuildFinalSchema(migrations, cancellationToken);
-            var outputPath = Path.GetFullPath(hostCommand.OutputPath!);
-            var outputDirectory = Path.GetDirectoryName(outputPath);
-            if (!string.IsNullOrEmpty(outputDirectory))
-            {
-                Directory.CreateDirectory(outputDirectory);
-            }
-
-            using (var writer = new StreamWriter(outputPath, append: false, new UTF8Encoding(false)))
-            {
-                writer.NewLine = "\n";
-                WriteSchema(writer, schema);
-            }
-
+            var outputPath = WriteSchemaJsonFile(schema, hostCommand.OutputPath);
             await output.WriteLineAsync($"Final schema was written to '{outputPath}'.").ConfigureAwait(false);
             return 0;
         }
@@ -136,16 +125,30 @@ public static class MigrationProjectHost
                         break;
 
                     case "up":
+                        MigrationSchema? schemaToWrite = hostCommand.WriteSchema && !hostCommand.DryRun
+                            ? runner.BuildFinalSchema(migrations, cancellationToken)
+                            : null;
                         if (hostCommand.DryRun)
                         {
                             var dryRun = await runner.DryRunUpAsync(connection, migrations, cancellationToken)
                                 .ConfigureAwait(false);
                             WriteDryRun(output, dryRun, context.ContentRootPath);
+                            if (hostCommand.WriteSchema)
+                            {
+                                schemaToWrite = dryRun.FinalSchema;
+                            }
                         }
                         else
                         {
                             await runner.MigrateUpAsync(connection, migrations, cancellationToken).ConfigureAwait(false);
                             await output.WriteLineAsync("Migrations are up to date.").ConfigureAwait(false);
+                        }
+
+                        if (schemaToWrite is not null)
+                        {
+                            var outputPath = WriteSchemaJsonFile(schemaToWrite, hostCommand.OutputPath);
+                            await output.WriteLineAsync($"Final schema was written to '{outputPath}'.")
+                                .ConfigureAwait(false);
                         }
                         break;
 
@@ -235,6 +238,10 @@ public static class MigrationProjectHost
             {
                 command.DryRun = true;
             }
+            else if (args[index] == "--write-schema")
+            {
+                command.WriteSchema = true;
+            }
             else
             {
                 positionals.Add(args[index]);
@@ -252,9 +259,16 @@ public static class MigrationProjectHost
                     return false;
                 }
 
-                if (command.OutputPath is not null)
+                if (command.WriteSchema && command.Name != "up")
                 {
-                    error = "--output can only be used with the schema command.";
+                    error = "--write-schema can only be used with the up command.";
+                    return false;
+                }
+
+                if (command.OutputPath is not null &&
+                    (command.Name != "up" || !command.WriteSchema))
+                {
+                    error = "--output can only be used with schema or up --write-schema.";
                     return false;
                 }
 
@@ -273,13 +287,8 @@ public static class MigrationProjectHost
                     return false;
                 }
 
-                if (string.IsNullOrWhiteSpace(command.OutputPath))
-                {
-                    error = "The schema command requires --output <path>.";
-                    return false;
-                }
-
-                if (command.DryRun || command.EnvironmentName is not null || command.SettingsPath is not null)
+                if (command.DryRun || command.WriteSchema ||
+                    command.EnvironmentName is not null || command.SettingsPath is not null)
                 {
                     error = "The schema command only accepts --output.";
                     return false;
@@ -288,9 +297,15 @@ public static class MigrationProjectHost
                 return true;
 
             case "down":
+                if (command.WriteSchema)
+                {
+                    error = "--write-schema can only be used with the up command.";
+                    return false;
+                }
+
                 if (command.OutputPath is not null)
                 {
-                    error = "--output can only be used with the schema command.";
+                    error = "--output can only be used with schema or up --write-schema.";
                     return false;
                 }
 
@@ -324,6 +339,8 @@ public static class MigrationProjectHost
         internal string? OutputPath { get; set; }
 
         internal bool DryRun { get; set; }
+
+        internal bool WriteSchema { get; set; }
     }
 
     private static void WriteAvailableMigrations(TextWriter output, IReadOnlyList<MigrationInfo> migrations)
@@ -398,10 +415,10 @@ public static class MigrationProjectHost
         }
 
         output.WriteLine("Final schema:");
-        WriteSchema(output, dryRun.FinalSchema);
+        WriteSchemaText(output, dryRun.FinalSchema);
     }
 
-    private static void WriteSchema(TextWriter output, MigrationSchema schema)
+    private static void WriteSchemaText(TextWriter output, MigrationSchema schema)
     {
         if (schema.Tables.Count == 0)
         {
@@ -427,6 +444,88 @@ public static class MigrationProjectHost
                 output.WriteLine(definition);
             }
         }
+    }
+
+    private static void WriteSchemaJson(Utf8JsonWriter writer, MigrationSchema schema)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("formatVersion", 1);
+        writer.WriteStartArray("tables");
+        foreach (var table in schema.Tables
+                     .OrderBy(table => table.SchemaName ?? string.Empty, StringComparer.Ordinal)
+                     .ThenBy(table => table.Name, StringComparer.Ordinal))
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("schema");
+            if (table.SchemaName is null)
+            {
+                writer.WriteNullValue();
+            }
+            else
+            {
+                writer.WriteStringValue(table.SchemaName);
+            }
+
+            writer.WriteString("name", table.Name);
+            writer.WriteStartArray("columns");
+            foreach (var column in table.Columns)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("name", column.Name);
+                writer.WriteString("sqlType", column.SqlType);
+                writer.WriteBoolean("nullable", column.IsNullable);
+                writer.WriteBoolean("primaryKey", column.IsPrimaryKey);
+                writer.WriteBoolean("identity", column.IsIdentity);
+                writer.WritePropertyName("defaultExpression");
+                if (column.DefaultExpression is null)
+                {
+                    writer.WriteNullValue();
+                }
+                else
+                {
+                    writer.WriteStringValue(column.DefaultExpression);
+                }
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static string WriteSchemaJsonFile(MigrationSchema schema, string? requestedOutputPath)
+    {
+        var outputPath = Path.GetFullPath(requestedOutputPath ?? "schema.generated.json");
+        var outputDirectory = Path.GetDirectoryName(outputPath);
+        if (!string.IsNullOrEmpty(outputDirectory))
+        {
+            Directory.CreateDirectory(outputDirectory);
+        }
+
+        using (var stream = File.Create(outputPath))
+        {
+            using (var writer = new Utf8JsonWriter(
+                       stream,
+                       new JsonWriterOptions
+                       {
+                           Indented = true,
+                           IndentCharacter = ' ',
+                           IndentSize = 2,
+                           Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                       }))
+            {
+                WriteSchemaJson(writer, schema);
+                writer.Flush();
+            }
+
+            stream.WriteByte((byte)'\n');
+        }
+
+        return outputPath;
     }
 
     internal static IReadOnlyDictionary<long, string> FindMigrationSourceFiles(string contentRootPath)

@@ -1,6 +1,8 @@
+using System;
 using System.Data.Common;
 using System.IO;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading.Tasks;
 using CobaltumOrm.Migrations.PostgreSql;
 using CobaltumOrm.Migrations.Tests.Fakes;
@@ -121,14 +123,20 @@ public sealed class MigrationProjectHostTests
     {
         var project = new FakeDryRunMigrationProject();
         project.Connection.HistoryVersions.AddRange(new long[] { 100, 200, 310 });
+        using var directory = new TemporaryMigrationDirectory();
         using var settings = new SettingsFile();
+        var schemaPath = Path.Combine(directory.Path, "schema.json");
         using var output = new StringWriter();
         using var error = new StringWriter();
 
         var exitCode = await MigrationProjectHost.RunAsync(
             project,
             TestMigrationCatalog.All,
-            new[] { "up", "--dry-run", "--settings", settings.Path },
+            new[]
+            {
+                "up", "--dry-run", "--write-schema", "--output", schemaPath,
+                "--settings", settings.Path,
+            },
             output,
             error);
 
@@ -141,6 +149,7 @@ public sealed class MigrationProjectHostTests
         Assert.Contains("Final version: 340", output.ToString());
         Assert.Contains("Table: public.preview_users", output.ToString());
         Assert.Contains("  id bigint NOT NULL PRIMARY KEY", output.ToString());
+        AssertSchemaJson(schemaPath);
         Assert.Equal(string.Empty, error.ToString());
     }
 
@@ -175,7 +184,7 @@ public sealed class MigrationProjectHostTests
     {
         var project = new FakeDryRunMigrationProject();
         using var directory = new TemporaryMigrationDirectory();
-        var schemaPath = Path.Combine(directory.Path, "artifacts", "schema.txt");
+        var schemaPath = Path.Combine(directory.Path, "artifacts", "schema.json");
         using var output = new StringWriter();
         using var error = new StringWriter();
 
@@ -189,32 +198,34 @@ public sealed class MigrationProjectHostTests
         Assert.True(exitCode == 0, error.ToString());
         Assert.Equal(0, project.ConnectionCreateCount);
         Assert.True(File.Exists(schemaPath));
-        var schema = File.ReadAllText(schemaPath);
-        Assert.Equal(
-            "Table: public.preview_users\n" +
-            "  id bigint NOT NULL PRIMARY KEY\n",
-            schema);
+        AssertSchemaJson(schemaPath);
         Assert.Contains("Final schema was written to", output.ToString());
         Assert.Equal(string.Empty, error.ToString());
     }
 
     [Fact]
-    public async Task SchemaRequiresAnOutputPath()
+    public async Task UpWritesTheFinalSchemaAfterApplyingMigrations()
     {
         var project = new FakeDryRunMigrationProject();
+        using var directory = new TemporaryMigrationDirectory();
+        using var settings = new SettingsFile();
+        var schemaPath = Path.Combine(directory.Path, "schema.json");
         using var output = new StringWriter();
         using var error = new StringWriter();
 
         var exitCode = await MigrationProjectHost.RunAsync(
             project,
             TestMigrationCatalog.All,
-            new[] { "schema" },
+            new[] { "up", "--write-schema", "--output", schemaPath, "--settings", settings.Path },
             output,
             error);
 
-        Assert.Equal(2, exitCode);
-        Assert.Contains("requires --output", error.ToString());
-        Assert.Equal(0, project.ConnectionCreateCount);
+        Assert.True(exitCode == 0, error.ToString());
+        Assert.Equal(new long[] { 100, 200, 310, 320, 330, 340 }, project.Connection.HistoryVersions);
+        AssertSchemaJson(schemaPath);
+        Assert.Contains("Migrations are up to date.", output.ToString());
+        Assert.Contains("Final schema was written to", output.ToString());
+        Assert.Equal(string.Empty, error.ToString());
     }
 
     [Fact]
@@ -228,6 +239,33 @@ public sealed class MigrationProjectHostTests
 
         Assert.Equal(Path.Combine("Migrations", "42_CreateUsers.cs"), sources[42]);
         Assert.Equal(Path.Combine("Migrations", "nested", "V50__add_names.sql"), sources[50]);
+    }
+
+    private static void AssertSchemaJson(string schemaPath)
+    {
+        var schemaJson = File.ReadAllText(schemaPath);
+        using var document = JsonDocument.Parse(schemaJson);
+        var root = document.RootElement;
+        Assert.Equal(1, root.GetProperty("formatVersion").GetInt32());
+        var table = Assert.Single(root.GetProperty("tables").EnumerateArray());
+        Assert.Equal("public", table.GetProperty("schema").GetString());
+        Assert.Equal("preview_users", table.GetProperty("name").GetString());
+        var columns = table.GetProperty("columns");
+        Assert.Equal(2, columns.GetArrayLength());
+        var column = columns[0];
+        Assert.Equal("id", column.GetProperty("name").GetString());
+        Assert.Equal("bigint", column.GetProperty("sqlType").GetString());
+        Assert.False(column.GetProperty("nullable").GetBoolean());
+        Assert.True(column.GetProperty("primaryKey").GetBoolean());
+        Assert.False(column.GetProperty("identity").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, column.GetProperty("defaultExpression").ValueKind);
+        var displayName = columns[1];
+        Assert.Equal("表示名", displayName.GetProperty("name").GetString());
+        Assert.Equal("'未設定'", displayName.GetProperty("defaultExpression").GetString());
+        Assert.StartsWith("{\n  \"formatVersion\": 1,\n  \"tables\": [\n", schemaJson, StringComparison.Ordinal);
+        Assert.Contains("          \"name\": \"表示名\",\n", schemaJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\u8868", schemaJson, StringComparison.OrdinalIgnoreCase);
+        Assert.EndsWith("}\n", schemaJson, StringComparison.Ordinal);
     }
 
     private sealed class FakeMigrationProject : MigrationProject
@@ -298,7 +336,11 @@ public sealed class MigrationProjectHostTests
                 new MigrationSchemaTable(
                     "public",
                     "preview_users",
-                    new[] { new MigrationSchemaColumn("id", "bigint", false, true, null) }),
+                    new[]
+                    {
+                        new MigrationSchemaColumn("id", "bigint", false, true, null),
+                        new MigrationSchemaColumn("表示名", "text", true, false, "'未設定'"),
+                    }),
             });
     }
 

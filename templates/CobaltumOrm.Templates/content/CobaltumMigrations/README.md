@@ -17,9 +17,10 @@ Create and inspect migrations from this directory:
 
 ```console
 cobaltum migrations add "create users"
-cobaltum migrations schema --output artifacts/schema.txt
+cobaltum migrations schema
 cobaltum migrations status --environment Development
 cobaltum migrations up --dry-run --environment Development
+cobaltum migrations up --write-schema --environment Development
 cobaltum migrations up --environment Development
 ```
 

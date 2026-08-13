@@ -50,7 +50,7 @@ public sealed class ToolApplicationTests
         Assert.DoesNotContain("#if", program);
         var readme = File.ReadAllText(Path.Combine(projectDirectory, "README.md"));
         Assert.Contains("../MyApp.Database/MyApp.Database.csproj", readme);
-        Assert.Contains("migrations schema --output artifacts/schema.txt", readme);
+        Assert.Contains("migrations schema", readme);
         Assert.Contains(projectPath, output.ToString());
         Assert.Equal(string.Empty, error.ToString());
         Assert.Null(processRunner.StartInfo);
@@ -183,7 +183,9 @@ public sealed class ToolApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("--provider <name>", output.ToString());
         Assert.Contains("default: PostgreSql", output.ToString());
-        Assert.Contains("migrations schema --output <path>", output.ToString());
+        Assert.Contains("migrations schema [--output <path>]", output.ToString());
+        Assert.Contains("--write-schema", output.ToString());
+        Assert.Contains("schema.generated.json", output.ToString());
         foreach (var provider in ProviderCases.Select(item => item[0]).Cast<string>())
         {
             Assert.Contains(provider, output.ToString());
@@ -350,7 +352,7 @@ public sealed class ToolApplicationTests
                 "migrations", "up", "--project", directory.Path,
                 "--configuration", "Release", "--framework", "net10.0", "--no-build",
                 "--environment", "Staging", "--settings", "settings/staging.json",
-                "--dry-run",
+                "--dry-run", "--write-schema",
             },
             CancellationToken.None);
 
@@ -362,9 +364,10 @@ public sealed class ToolApplicationTests
             new[]
             {
                 "run", "--project", project, "--configuration", "Release", "--no-launch-profile",
-                "--no-build", "--framework", "net10.0", "--", "up", "--environment", "Staging",
+                "--no-build", "--framework", "net10.0", "--", "up",
+                "--output", Path.Combine(directory.Path, "schema.generated.json"), "--environment", "Staging",
                 "--settings", Path.Combine(directory.Path, "settings", "staging.json"),
-                "--dry-run",
+                "--dry-run", "--write-schema",
             },
             startInfo.ArgumentList);
     }
@@ -400,7 +403,7 @@ public sealed class ToolApplicationTests
             new[]
             {
                 "migrations", "schema", "--project", project,
-                "--output", "artifacts/schema.txt",
+                "--output", "artifacts/schema.json",
             },
             CancellationToken.None);
 
@@ -410,29 +413,38 @@ public sealed class ToolApplicationTests
             new[]
             {
                 "run", "--project", project, "--configuration", "Debug", "--no-launch-profile",
-                "--", "schema", "--output", Path.Combine(directory.Path, "artifacts", "schema.txt"),
+                "--", "schema", "--output", Path.Combine(directory.Path, "artifacts", "schema.json"),
             },
             startInfo.ArgumentList);
         Assert.Equal(string.Empty, error.ToString());
     }
 
     [Fact]
-    public async Task SchemaRequiresAnOutputPath()
+    public async Task SchemaDefaultsToTheDiscoveredMigrationProjectDirectory()
     {
         using var directory = new TemporaryDirectory();
-        var project = directory.WriteProject();
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(directory.Path, "src", "Database"));
+        var project = directory.WriteProject(projectDirectory.FullName);
         var processRunner = new RecordingProcessRunner();
         using var output = new StringWriter();
         using var error = new StringWriter();
         var application = new ToolApplication(output, error, processRunner, directory.Path);
 
         var exitCode = await application.RunAsync(
-            new[] { "migrations", "schema", "--project", project },
+            new[] { "migrations", "schema" },
             CancellationToken.None);
 
-        Assert.Equal(2, exitCode);
-        Assert.Contains("requires --output", error.ToString());
-        Assert.Null(processRunner.StartInfo);
+        Assert.Equal(0, exitCode);
+        var startInfo = Assert.IsType<ProcessStartInfo>(processRunner.StartInfo);
+        Assert.Equal(projectDirectory.FullName, startInfo.WorkingDirectory);
+        Assert.Equal(
+            new[]
+            {
+                "run", "--project", project, "--configuration", "Debug", "--no-launch-profile",
+                "--", "schema", "--output", Path.Combine(projectDirectory.FullName, "schema.generated.json"),
+            },
+            startInfo.ArgumentList);
+        Assert.Equal(string.Empty, error.ToString());
     }
 
     [Fact]
