@@ -635,6 +635,8 @@ For a library project that you keep in source control and build anywhere, use `-
 
 Explicit generation works best when the code that talks to the database lives in its own project. Put the `[Query]` containers, the `Query` call sites, and the migration reference in a query project, and let the application project reference it:
 
+Build-time optimization is ongoing. In the [2026-08-13 benchmark](benchmarks/CobaltumOrm.BuildBenchmarks/README.md#results-from-2026-08-13), a project with 1,000 `[Query]` declarations and 1,000 `Query(...)` methods took 1.1 seconds for a no-change build. A clean build took 11.9 seconds, and a build after changing one C# file without a query took 8.5 seconds. Projects with many queries should use a separate query project so unrelated application changes do not repeat the analysis.
+
 ```
 src/
   MyApp.Database/          migration project
