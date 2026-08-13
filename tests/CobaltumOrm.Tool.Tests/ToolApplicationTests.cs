@@ -50,6 +50,7 @@ public sealed class ToolApplicationTests
         Assert.DoesNotContain("#if", program);
         var readme = File.ReadAllText(Path.Combine(projectDirectory, "README.md"));
         Assert.Contains("../MyApp.Database/MyApp.Database.csproj", readme);
+        Assert.Contains("migrations schema --output artifacts/schema.txt", readme);
         Assert.Contains(projectPath, output.ToString());
         Assert.Equal(string.Empty, error.ToString());
         Assert.Null(processRunner.StartInfo);
@@ -182,6 +183,7 @@ public sealed class ToolApplicationTests
         Assert.Equal(0, exitCode);
         Assert.Contains("--provider <name>", output.ToString());
         Assert.Contains("default: PostgreSql", output.ToString());
+        Assert.Contains("migrations schema --output <path>", output.ToString());
         foreach (var provider in ProviderCases.Select(item => item[0]).Cast<string>())
         {
             Assert.Contains(provider, output.ToString());
@@ -382,6 +384,55 @@ public sealed class ToolApplicationTests
 
         Assert.Equal(2, exitCode);
         Assert.Contains("--dry-run can only be used", error.ToString());
+    }
+
+    [Fact]
+    public async Task SchemaRunsTheMigrationProjectWithAnAbsoluteOutputPath()
+    {
+        using var directory = new TemporaryDirectory();
+        var project = directory.WriteProject();
+        var processRunner = new RecordingProcessRunner();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var application = new ToolApplication(output, error, processRunner, directory.Path);
+
+        var exitCode = await application.RunAsync(
+            new[]
+            {
+                "migrations", "schema", "--project", project,
+                "--output", "artifacts/schema.txt",
+            },
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        var startInfo = Assert.IsType<ProcessStartInfo>(processRunner.StartInfo);
+        Assert.Equal(
+            new[]
+            {
+                "run", "--project", project, "--configuration", "Debug", "--no-launch-profile",
+                "--", "schema", "--output", Path.Combine(directory.Path, "artifacts", "schema.txt"),
+            },
+            startInfo.ArgumentList);
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    [Fact]
+    public async Task SchemaRequiresAnOutputPath()
+    {
+        using var directory = new TemporaryDirectory();
+        var project = directory.WriteProject();
+        var processRunner = new RecordingProcessRunner();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var application = new ToolApplication(output, error, processRunner, directory.Path);
+
+        var exitCode = await application.RunAsync(
+            new[] { "migrations", "schema", "--project", project },
+            CancellationToken.None);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("requires --output", error.ToString());
+        Assert.Null(processRunner.StartInfo);
     }
 
     [Fact]

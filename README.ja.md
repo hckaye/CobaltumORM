@@ -515,6 +515,7 @@ cobaltum migrations up --environment Production --settings config/migrations.pro
 cobaltum migrations init MyApp.Database --output src/MyApp.Database --provider PostgreSql
 cobaltum migrations add "create users" --project src/MyApp.Database
 cobaltum migrations list --project src/MyApp.Database
+cobaltum migrations schema --output artifacts/schema.txt --project src/MyApp.Database
 cobaltum migrations status --project src/MyApp.Database
 cobaltum migrations up --project src/MyApp.Database
 cobaltum migrations up --dry-run --project src/MyApp.Database
@@ -524,6 +525,8 @@ cobaltum migrations down 0 --project src/MyApp.Database
 ```
 
 `init` は決まった形式のマイグレーションプロジェクトを作り、プロジェクト名を root namespace に使います。`add` は、ロールバック可能な C# マイグレーションをプロジェクトの `Migrations` ディレクトリに作成します。バージョンを省略すると UTC の日時が使われます。`--version` を使う場合は、既存の C# マイグレーションと Flyway 互換 SQL より大きい正の値を指定してください。`list` はプロジェクトをビルドし、データベースへ接続せずにマイグレーション定義を表示します。`status`、`up`、`down` はマイグレーションプロジェクトの対象 .NET とビルド設定で動きます。既定以外のビルドが必要な場合は、`--configuration`、`--framework`、`--no-build` を使えます。`down 0` は、ロールバック可能なマイグレーションをすべて戻します。ロールバックできないマイグレーションが対象に含まれる場合は、処理を始める前にエラーになります。
+
+`schema` は、空のスキーマにすべてのマイグレーションの `Up` 定義を順番に反映し、最終的なテーブルと列を UTF-8 のテキストファイルへ書き出します。データベースへの接続や connection string の読み込みは行いません。出力先の親ディレクトリがない場合は作成し、既存のファイルは置き換えます。出力は確認用のスキーマ一覧であり、実行可能な SQL ではありません。
 
 `up` または `down` に `--dry-run` を付けると、対象となる `Migrations` 以下のファイル、実行予定の SQL、実行後に想定されるテーブルと列を表示します。選択した接続先からマイグレーション履歴を読み取りますが、履歴テーブルの作成、マイグレーション SQL の実行、履歴の更新は行いません。最終スキーマはマイグレーション定義から組み立てます。対応範囲は選択した provider のビルド時スキーマ生成にある操作と同じです。テーブル構造を変える可能性がある未対応の SQL が含まれる場合は、不完全なスキーマを表示せずエラーにします。
 

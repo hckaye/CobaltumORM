@@ -79,6 +79,11 @@ internal sealed class ToolApplication
                 options.SettingsPath = Path.GetFullPath(options.SettingsPath, _currentDirectory);
             }
 
+            if (options.Command == "schema")
+            {
+                options.Output = Path.GetFullPath(options.Output!, _currentDirectory);
+            }
+
             var projectPath = ResolveProject(options.Project);
             if (options.Command == "add")
             {
@@ -112,7 +117,7 @@ internal sealed class ToolApplication
     {
         var command = args[1].ToLowerInvariant();
         if (command != "init" && command != "add" && command != "list" && command != "status" &&
-            command != "up" && command != "down")
+            command != "up" && command != "down" && command != "schema")
         {
             throw new ToolUsageException($"Unknown migrations command '{args[1]}'.");
         }
@@ -242,9 +247,14 @@ internal sealed class ToolApplication
             throw new ToolUsageException("--version can only be used with migrations add.");
         }
 
-        if (options.Output is not null)
+        if (options.Command == "schema" && options.Output is null)
         {
-            throw new ToolUsageException("--output can only be used with migrations init.");
+            throw new ToolUsageException("The schema command requires --output <path>.");
+        }
+
+        if (options.Output is not null && options.Command != "schema")
+        {
+            throw new ToolUsageException("--output can only be used with migrations init and migrations schema.");
         }
 
         if (options.Command == "add" && (options.NoBuild || options.Framework is not null))
@@ -261,6 +271,12 @@ internal sealed class ToolApplication
             (options.EnvironmentName is not null || options.SettingsPath is not null))
         {
             throw new ToolUsageException("--environment and --settings cannot be used with migrations add.");
+        }
+
+        if (options.Command == "schema" &&
+            (options.EnvironmentName is not null || options.SettingsPath is not null))
+        {
+            throw new ToolUsageException("--environment and --settings cannot be used with migrations schema.");
         }
 
         if (string.IsNullOrWhiteSpace(options.Configuration))
@@ -374,6 +390,12 @@ internal sealed class ToolApplication
             startInfo.ArgumentList.Add(positional);
         }
 
+        if (options.Output is not null)
+        {
+            startInfo.ArgumentList.Add("--output");
+            startInfo.ArgumentList.Add(options.Output);
+        }
+
         if (options.EnvironmentName is not null)
         {
             startInfo.ArgumentList.Add("--environment");
@@ -407,11 +429,12 @@ internal sealed class ToolApplication
         writer.WriteLine("  cobaltum migrations add <name> [--version <number>] [--project <path>]");
         writer.WriteLine("  cobaltum migrations list [--project <path>]");
         writer.WriteLine("  cobaltum migrations status [--project <path>]");
+        writer.WriteLine("  cobaltum migrations schema --output <path> [--project <path>]");
         writer.WriteLine("  cobaltum migrations up [--dry-run] [--project <path>]");
         writer.WriteLine("  cobaltum migrations down <target-version> [--dry-run] [--project <path>]");
         writer.WriteLine();
         writer.WriteLine("Options:");
-        writer.WriteLine("  -o, --output <path>         Output directory for migrations init");
+        writer.WriteLine("  -o, --output <path>         Output directory for init or schema file for schema");
         writer.WriteLine("  -p, --project <path>        Migration .csproj file or its directory");
         writer.WriteLine("  -c, --configuration <name> Build configuration (default: Debug)");
         writer.WriteLine("  -f, --framework <tfm>      Target framework for init or dotnet run");

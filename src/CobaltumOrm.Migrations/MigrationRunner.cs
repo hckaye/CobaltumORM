@@ -82,6 +82,23 @@ public sealed class MigrationRunner
             targetVersion,
             cancellationToken);
 
+    /// <summary>Builds the schema produced by applying every migration to an empty database.</summary>
+    public MigrationSchema BuildFinalSchema(
+        IEnumerable<MigrationInfo> migrationCatalog,
+        CancellationToken cancellationToken = default)
+    {
+        var migrations = MigrationCatalogValidator.Validate(migrationCatalog);
+        var dryRunAdapter = GetDryRunAdapter();
+        var commands = new List<MigrationCommand>();
+        foreach (var migration in migrations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            commands.AddRange(CollectCommands(migration, up: true));
+        }
+
+        return BuildSchema(dryRunAdapter, commands);
+    }
+
     private async Task MigrateUpCoreAsync(
         DbConnection connection,
         IReadOnlyList<MigrationInfo> migrations,
@@ -242,11 +259,7 @@ public sealed class MigrationRunner
                 "The target version cannot be negative.");
         }
 
-        if (!(_adapter is IMigrationDryRunDatabaseAdapter dryRunAdapter))
-        {
-            throw new MigrationValidationException(
-                $"The migration adapter '{_adapter.GetType().FullName}' does not support dry runs.");
-        }
+        var dryRunAdapter = GetDryRunAdapter();
 
         ValidateConnection(connection);
         var closeWhenFinished = connection.State == ConnectionState.Closed;
@@ -298,11 +311,7 @@ public sealed class MigrationRunner
                 schemaCommands.AddRange(entry.Commands);
             }
 
-            var finalSchema = dryRunAdapter.BuildSchema(schemaCommands);
-            if (finalSchema is null)
-            {
-                throw new MigrationValidationException("The migration adapter returned a null final schema.");
-            }
+            var finalSchema = BuildSchema(dryRunAdapter, schemaCommands);
 
             var currentVersion = appliedVersions.Count == 0 ? 0 : appliedVersions[appliedVersions.Count - 1];
             var targetVersion = finalMigrationCount == 0 ? 0 : migrations[finalMigrationCount - 1].Version;
@@ -472,6 +481,30 @@ public sealed class MigrationRunner
         }
 
         return commands;
+    }
+
+    private IMigrationDryRunDatabaseAdapter GetDryRunAdapter()
+    {
+        if (_adapter is IMigrationDryRunDatabaseAdapter dryRunAdapter)
+        {
+            return dryRunAdapter;
+        }
+
+        throw new MigrationValidationException(
+            $"The migration adapter '{_adapter.GetType().FullName}' does not support schema reconstruction.");
+    }
+
+    private static MigrationSchema BuildSchema(
+        IMigrationDryRunDatabaseAdapter dryRunAdapter,
+        IReadOnlyList<MigrationCommand> commands)
+    {
+        var schema = dryRunAdapter.BuildSchema(commands);
+        if (schema is null)
+        {
+            throw new MigrationValidationException("The migration adapter returned a null final schema.");
+        }
+
+        return schema;
     }
 
     private static void ValidateHistoryIsOrderedPrefix(

@@ -48,7 +48,7 @@ public sealed class MigrationCommand
     {
     }
 
-    /// <summary>Initializes a command and controls whether dry-run schema reconstruction analyzes it.</summary>
+    /// <summary>Initializes a command and controls whether schema reconstruction analyzes it.</summary>
     /// <param name="commandText">The SQL command text.</param>
     /// <param name="parameters">Parameters in provider binding order.</param>
     /// <param name="analyzeForSchema">Whether the command can change table columns.</param>
@@ -84,7 +84,7 @@ public sealed class MigrationCommand
     /// <summary>Gets parameters in provider binding order.</summary>
     public IReadOnlyList<MigrationCommandParameter> Parameters => _parameters;
 
-    /// <summary>Gets whether dry-run schema reconstruction should analyze this command.</summary>
+    /// <summary>Gets whether schema reconstruction should analyze this command.</summary>
     public bool AnalyzeForSchema { get; }
 }
 
@@ -122,7 +122,7 @@ public interface IMigrationDatabaseAdapter
 }
 
 /// <summary>
-/// Adds the read-only database checks and schema analysis required by migration dry runs.
+/// Adds the read-only database checks and schema analysis required by migration previews and schema exports.
 /// </summary>
 public interface IMigrationDryRunDatabaseAdapter
 {

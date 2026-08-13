@@ -345,6 +345,21 @@ public sealed class MigrationRunnerTests
     }
 
     [Fact]
+    public void BuildFinalSchemaAppliesEveryUpMigrationWithoutADatabaseConnection()
+    {
+        var runner = new MigrationRunner(new PostgreSqlMigrationAdapter());
+
+        var schema = runner.BuildFinalSchema(new[] { TestMigrationCatalog.CreateAllTypes });
+
+        var table = Assert.Single(schema.Tables);
+        Assert.Equal("app\"data", table.SchemaName);
+        Assert.Equal("widget\"items", table.Name);
+        Assert.Contains(
+            table.Columns,
+            column => column.Name == "id" && column.IsPrimaryKey && column.IsIdentity);
+    }
+
+    [Fact]
     public async Task RejectsDuplicateDiscoveredVersionsBeforeOpeningConnection()
     {
         var connection = new FakeDbConnection();

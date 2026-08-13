@@ -171,6 +171,53 @@ public sealed class MigrationProjectHostTests
     }
 
     [Fact]
+    public async Task SchemaWritesTheFinalSchemaWithoutCreatingAConnection()
+    {
+        var project = new FakeDryRunMigrationProject();
+        using var directory = new TemporaryMigrationDirectory();
+        var schemaPath = Path.Combine(directory.Path, "artifacts", "schema.txt");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await MigrationProjectHost.RunAsync(
+            project,
+            TestMigrationCatalog.All,
+            new[] { "schema", "--output", schemaPath },
+            output,
+            error);
+
+        Assert.True(exitCode == 0, error.ToString());
+        Assert.Equal(0, project.ConnectionCreateCount);
+        Assert.True(File.Exists(schemaPath));
+        var schema = File.ReadAllText(schemaPath);
+        Assert.Equal(
+            "Table: public.preview_users\n" +
+            "  id bigint NOT NULL PRIMARY KEY\n",
+            schema);
+        Assert.Contains("Final schema was written to", output.ToString());
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    [Fact]
+    public async Task SchemaRequiresAnOutputPath()
+    {
+        var project = new FakeDryRunMigrationProject();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await MigrationProjectHost.RunAsync(
+            project,
+            TestMigrationCatalog.All,
+            new[] { "schema" },
+            output,
+            error);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("requires --output", error.ToString());
+        Assert.Equal(0, project.ConnectionCreateCount);
+    }
+
+    [Fact]
     public void MigrationSourceFilesAreResolvedFromTheFixedMigrationsDirectory()
     {
         using var directory = new TemporaryMigrationDirectory();
@@ -206,7 +253,13 @@ public sealed class MigrationProjectHostTests
     {
         internal FakeDbConnection Connection { get; } = new FakeDbConnection();
 
-        public override DbConnection CreateConnection(MigrationProjectContext context) => Connection;
+        internal int ConnectionCreateCount { get; private set; }
+
+        public override DbConnection CreateConnection(MigrationProjectContext context)
+        {
+            ConnectionCreateCount++;
+            return Connection;
+        }
 
         public override IMigrationDatabaseAdapter CreateAdapter() => new FakeDryRunAdapter();
 

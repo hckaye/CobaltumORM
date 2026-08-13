@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -94,6 +95,26 @@ public static class MigrationProjectHost
 
         var adapter = project.CreateAdapter()
             ?? throw new MigrationValidationException("The migration project returned a null database adapter.");
+        if (hostCommand.Name == "schema")
+        {
+            var schema = new MigrationRunner(adapter).BuildFinalSchema(migrations, cancellationToken);
+            var outputPath = Path.GetFullPath(hostCommand.OutputPath!);
+            var outputDirectory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrEmpty(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+
+            using (var writer = new StreamWriter(outputPath, append: false, new UTF8Encoding(false)))
+            {
+                writer.NewLine = "\n";
+                WriteSchema(writer, schema);
+            }
+
+            await output.WriteLineAsync($"Final schema was written to '{outputPath}'.").ConfigureAwait(false);
+            return 0;
+        }
+
         var options = project.RunnerOptions
             ?? throw new MigrationValidationException("The migration project returned null runner options.");
         using (var context = MigrationProjectConfiguration.Load(
@@ -181,7 +202,7 @@ public static class MigrationProjectHost
 
         if (args.Length == 0)
         {
-            error = "A migration command is required. Expected list, status, up, or down <target-version>.";
+            error = "A migration command is required. Expected list, status, schema, up, or down <target-version>.";
             return false;
         }
 
@@ -189,7 +210,7 @@ public static class MigrationProjectHost
         var positionals = new List<string>();
         for (var index = 1; index < args.Length; index++)
         {
-            if (args[index] == "--environment" || args[index] == "--settings")
+            if (args[index] == "--environment" || args[index] == "--settings" || args[index] == "--output")
             {
                 if (++index == args.Length || string.IsNullOrWhiteSpace(args[index]))
                 {
@@ -201,9 +222,13 @@ public static class MigrationProjectHost
                 {
                     command.EnvironmentName = args[index];
                 }
-                else
+                else if (args[index - 1] == "--settings")
                 {
                     command.SettingsPath = args[index];
+                }
+                else
+                {
+                    command.OutputPath = args[index];
                 }
             }
             else if (args[index] == "--dry-run")
@@ -227,6 +252,12 @@ public static class MigrationProjectHost
                     return false;
                 }
 
+                if (command.OutputPath is not null)
+                {
+                    error = "--output can only be used with the schema command.";
+                    return false;
+                }
+
                 if (command.DryRun && command.Name != "up")
                 {
                     error = "--dry-run can only be used with the up and down commands.";
@@ -235,7 +266,34 @@ public static class MigrationProjectHost
 
                 return true;
 
+            case "schema":
+                if (positionals.Count != 0)
+                {
+                    error = "The schema command does not accept positional arguments.";
+                    return false;
+                }
+
+                if (string.IsNullOrWhiteSpace(command.OutputPath))
+                {
+                    error = "The schema command requires --output <path>.";
+                    return false;
+                }
+
+                if (command.DryRun || command.EnvironmentName is not null || command.SettingsPath is not null)
+                {
+                    error = "The schema command only accepts --output.";
+                    return false;
+                }
+
+                return true;
+
             case "down":
+                if (command.OutputPath is not null)
+                {
+                    error = "--output can only be used with the schema command.";
+                    return false;
+                }
+
                 if (positionals.Count != 1 ||
                     !long.TryParse(positionals[0], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedVersion) ||
                     parsedVersion < 0)
@@ -248,7 +306,7 @@ public static class MigrationProjectHost
                 return true;
 
             default:
-                error = $"Unknown migration command '{args[0]}'. Expected list, status, up, or down.";
+                error = $"Unknown migration command '{args[0]}'. Expected list, status, schema, up, or down.";
                 return false;
         }
     }
@@ -262,6 +320,8 @@ public static class MigrationProjectHost
         internal string? EnvironmentName { get; set; }
 
         internal string? SettingsPath { get; set; }
+
+        internal string? OutputPath { get; set; }
 
         internal bool DryRun { get; set; }
     }
@@ -338,13 +398,18 @@ public static class MigrationProjectHost
         }
 
         output.WriteLine("Final schema:");
-        if (dryRun.FinalSchema.Tables.Count == 0)
+        WriteSchema(output, dryRun.FinalSchema);
+    }
+
+    private static void WriteSchema(TextWriter output, MigrationSchema schema)
+    {
+        if (schema.Tables.Count == 0)
         {
             output.WriteLine("  No tables.");
             return;
         }
 
-        foreach (var table in dryRun.FinalSchema.Tables
+        foreach (var table in schema.Tables
                      .OrderBy(table => table.SchemaName ?? string.Empty, StringComparer.Ordinal)
                      .ThenBy(table => table.Name, StringComparer.Ordinal))
         {
