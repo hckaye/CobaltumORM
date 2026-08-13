@@ -1,0 +1,54 @@
+<Project>
+  <!--
+    Used by "cobaltum generate". The command injects this file through
+    CustomAfterMicrosoftCommonTargets and asks MSBuild for the evaluated Compile items,
+    references, AdditionalFiles, migration project inputs, and compiler properties, so the
+    command sees exactly what the normal build sees. It never edits the project.
+  -->
+  <Target Name="CobaltumOrmWriteGenerationInputs" DependsOnTargets="ResolveReferences">
+    <Error Condition="'$(CobaltumOrmGenerationInputsFile)' == ''"
+           Text="CobaltumOrmGenerationInputsFile must be set when running CobaltumOrmWriteGenerationInputs." />
+
+    <MSBuild Condition="'@(CobaltumOrmMigrationProjectReference)' != ''"
+             Projects="@(CobaltumOrmMigrationProjectReference)"
+             Targets="CobaltumOrmGetMigrationInputs"
+             BuildInParallel="true"
+             Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_CobaltumOrmGenerateMigrationInput" />
+    </MSBuild>
+
+    <ItemGroup>
+      <_CobaltumOrmGenerateMigrationSource Include="@(_CobaltumOrmGenerateMigrationInput)"
+                                           Condition="'%(CobaltumOrmInputKind)' == 'CSharp' and Exists('%(FullPath)')" />
+      <_CobaltumOrmGenerateMigrationSql Include="@(_CobaltumOrmGenerateMigrationInput)"
+                                        Condition="'%(CobaltumOrmInputKind)' == 'Sql' and Exists('%(FullPath)')" />
+      <_CobaltumOrmGenerateAdditionalFile Include="@(AdditionalFiles);@(_CobaltumOrmGenerateMigrationSource);@(_CobaltumOrmGenerateMigrationSql)" />
+      <_CobaltumOrmGenerateCompile Include="@(Compile)"
+                                   Condition="'%(Compile.Extension)' == '.cs' and '%(Compile.AutoGen)' != 'true' and '%(Compile.DesignTime)' != 'true' and '%(Compile.CobaltumOrmTransformed)' != 'true'" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <_CobaltumOrmGenerationLine Include="project=$(MSBuildProjectFullPath)" />
+      <_CobaltumOrmGenerationLine Include="projectdirectory=$(MSBuildProjectDirectory)" />
+      <_CobaltumOrmGenerationLine Include="targetframework=$(TargetFramework)" />
+      <_CobaltumOrmGenerationLine Include="configuration=$(Configuration)" />
+      <_CobaltumOrmGenerationLine Include="assemblyname=$(AssemblyName)" />
+      <_CobaltumOrmGenerationLine Include="rootnamespace=$(RootNamespace)" />
+      <_CobaltumOrmGenerationLine Include="intermediateoutputpath=$([MSBuild]::NormalizeDirectory('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)'))" />
+      <_CobaltumOrmGenerationLine Include="langversion=$(LangVersion)" />
+      <_CobaltumOrmGenerationLine Include="nullable=$(Nullable)" />
+      <_CobaltumOrmGenerationLine Include="implicitusings=$(ImplicitUsings)" />
+      <_CobaltumOrmGenerationLine Include="defineconstants=$([MSBuild]::Escape('$(DefineConstants)'))" />
+      <_CobaltumOrmGenerationLine Include="databaseprovider=$(CobaltumOrmDatabaseProvider)" />
+      <_CobaltumOrmGenerationLine Include="generatednamespace=$(CobaltumOrmGeneratedNamespace)" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateCompile->'compile=%(FullPath)')" />
+      <_CobaltumOrmGenerationLine Include="@(ReferencePath->'reference=%(FullPath)')" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateAdditionalFile->'additionalfile=%(FullPath)')" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateMigrationSource->'migrationsource=%(FullPath)')" />
+    </ItemGroup>
+
+    <WriteLinesToFile File="$(CobaltumOrmGenerationInputsFile)"
+                      Lines="@(_CobaltumOrmGenerationLine)"
+                      Overwrite="true" />
+  </Target>
+</Project>
