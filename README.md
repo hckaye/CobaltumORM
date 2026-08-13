@@ -56,6 +56,8 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 
 The [benchmark project](benchmarks/CobaltumOrm.Benchmarks/README.md) runs PostgreSQL comparisons for CobaltumORM, Dapper, EF Core, LINQ to DB, RepoDB, and ADO.NET. It starts a Docker container and creates the test data automatically.
 
+The [build-time benchmark](benchmarks/CobaltumOrm.BuildBenchmarks/README.md) measures projects containing many queries and migration statements.
+
 ## Database providers
 
 PostgreSQL is the main target. Migration project creation supports these five provider values:

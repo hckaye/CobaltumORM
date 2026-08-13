@@ -56,6 +56,8 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 
 PostgreSQL を使った CobaltumORM、Dapper、EF Core、LINQ to DB、RepoDB、ADO.NET の実測比較は、[ベンチマークプロジェクト](benchmarks/CobaltumOrm.Benchmarks/README.ja.md)から実行できます。Docker コンテナの起動とテストデータの作成は自動です。
 
+大量のクエリとマイグレーションを含む場合のビルド時間は、[ビルド時間ベンチマーク](benchmarks/CobaltumOrm.BuildBenchmarks/README.ja.md)で測定できます。
+
 ## データベースプロバイダー
 
 主な対象は PostgreSQL です。マイグレーションプロジェクトの作成では、次の 5 つのプロバイダー名を使えます。
