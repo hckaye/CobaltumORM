@@ -92,7 +92,9 @@ internal sealed class GenerationOutputWriter
         var removed = new List<string>();
         foreach (var recorded in ReadManifestFiles(_request.OutputDirectory))
         {
-            if (current.Contains(recorded) || !IsInsideOutput(recorded))
+            // Every file the tool writes sits directly in the output directory. An entry that
+            // names anything else comes from a hand-edited or damaged manifest, so leave it alone.
+            if (current.Contains(recorded) || !IsPlainFileName(recorded))
             {
                 continue;
             }
@@ -106,19 +108,6 @@ internal sealed class GenerationOutputWriter
         }
 
         return removed;
-    }
-
-    private bool IsInsideOutput(string relativePath)
-    {
-        if (Path.IsPathRooted(relativePath))
-        {
-            return false;
-        }
-
-        var combined = Path.GetFullPath(Path.Combine(_request.OutputDirectory, relativePath));
-        return combined.StartsWith(
-            _request.OutputDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
-            StringComparison.OrdinalIgnoreCase);
     }
 
     private string WriteManifest(IEnumerable<string> files)
@@ -266,11 +255,7 @@ internal sealed class GenerationOutputWriter
     /// <summary>Keeps a generated file name inside the output directory.</summary>
     private static string SafeFileName(string fileName)
     {
-        if (fileName.Length == 0 ||
-            Path.IsPathRooted(fileName) ||
-            fileName.Contains("..", StringComparison.Ordinal) ||
-            fileName.Contains('/', StringComparison.Ordinal) ||
-            fileName.Contains('\\', StringComparison.Ordinal))
+        if (!IsPlainFileName(fileName))
         {
             throw new ToolExecutionException(
                 $"Generated file name '{fileName}' must be a plain file name inside the output directory.");
@@ -278,6 +263,14 @@ internal sealed class GenerationOutputWriter
 
         return fileName;
     }
+
+    /// <summary>True when the value names a file directly inside the output directory.</summary>
+    private static bool IsPlainFileName(string fileName) =>
+        fileName.Length != 0 &&
+        !Path.IsPathRooted(fileName) &&
+        !fileName.Contains("..", StringComparison.Ordinal) &&
+        !fileName.Contains('/', StringComparison.Ordinal) &&
+        !fileName.Contains('\\', StringComparison.Ordinal);
 
     private static string Escape(string value) => SecurityElement.Escape(value) ?? value;
 

@@ -620,9 +620,9 @@ cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj \
   --output-mode library --output src/MyApp.Queries.Generated --library-name MyApp.Queries.Generated
 ```
 
-The written project sets `EnableDefaultCompileItems` to `false`, imports the props file, and compiles the generated files, the rewritten sources, and the sources that were not rewritten. The references come from the same resolved reference list the source project uses.
+The written project sets `EnableDefaultCompileItems` to `false`, imports the props file, and compiles the generated files, the rewritten sources, and the sources that were not rewritten. Its references are the resolved reference list of the source project, written as `HintPath` values that point at package and output directories on the machine that ran the command. A project written by `--library-name` therefore belongs to that machine. Regenerate it there instead of checking it in and building it somewhere else.
 
-With `--library-project`, the destination is a `.csproj` you already own. The tool writes the generated files and the props file next to it and does not modify it. Add these lines yourself:
+For a library project that you keep in source control and build anywhere, use `--library-project`. The destination is a `.csproj` you already own, where you declare references as normal `PackageReference` and `ProjectReference` entries. The tool writes the generated files and the props file next to it and does not modify it. Add these lines yourself:
 
 ```xml
 <PropertyGroup>

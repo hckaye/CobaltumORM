@@ -238,6 +238,40 @@ public sealed class GenerateCommandTests
         Assert.True(File.Exists(stray));
     }
 
+    [Fact]
+    public async Task ManifestEntriesThatAreNotPlainFileNamesAreIgnored()
+    {
+        using var fixture = new GenerateFixture();
+        fixture.AddSource("Migrations.cs", MigrationSource);
+        var output = Path.Combine(fixture.Root, "Generated");
+        Directory.CreateDirectory(Path.Combine(output, "subdir"));
+        var nested = Path.Combine(output, "subdir", "user.cs");
+        File.WriteAllText(nested, "// user owned");
+        var outside = Path.Combine(fixture.Root, "escaped.cs");
+        File.WriteAllText(outside, "// user owned");
+        File.WriteAllText(
+            Path.Combine(output, GenerationOutputWriter.ManifestFileName),
+            string.Join(
+                Environment.NewLine,
+                "# CobaltumORM explicit generation output",
+                "mode=directory",
+                "file=subdir/user.cs",
+                "file=../escaped.cs",
+                "file=CobaltumOrm.Stale.g.cs"));
+        var stale = Path.Combine(output, "CobaltumOrm.Stale.g.cs");
+        File.WriteAllText(stale, "// stale");
+
+        var run = await fixture.RunAsync(
+            "generate", "--project", fixture.ProjectPath, "--output-mode", "directory", "--output", output);
+
+        Assert.Equal(0, run.ExitCode);
+        Assert.True(File.Exists(nested));
+        Assert.True(File.Exists(outside));
+        Assert.False(File.Exists(stale));
+        Assert.Contains("removed CobaltumOrm.Stale.g.cs", run.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("removed subdir", run.Output, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(".")]
     [InlineData("..")]

@@ -620,9 +620,9 @@ cobaltum generate --project src/MyApp.Queries/MyApp.Queries.csproj \
   --output-mode library --output src/MyApp.Queries.Generated --library-name MyApp.Queries.Generated
 ```
 
-書き出される csproj は `EnableDefaultCompileItems` を `false` にし、props ファイルを読み込み、生成ファイル、書き換え後のソース、書き換えの対象にならなかったソースをコンパイルします。参照は、元のプロジェクトで解決された参照一覧をそのまま使います。
+書き出される csproj は `EnableDefaultCompileItems` を `false` にし、props ファイルを読み込み、生成ファイル、書き換え後のソース、書き換えの対象にならなかったソースをコンパイルします。参照は、元のプロジェクトで解決された参照一覧を `HintPath` として書き出します。この `HintPath` はコマンドを実行した環境のパッケージディレクトリや出力ディレクトリを指すため、`--library-name` で書き出した csproj はその環境専用です。リポジトリに入れて別の環境でビルドするのではなく、その環境で生成し直してください。
 
-`--library-project` を使う場合、出力先は既存の csproj です。ツールは生成ファイルと props ファイルをその隣に書き出すだけで、csproj は変更しません。次の記述は利用者が追加してください。
+ソース管理に入れてどの環境でもビルドできるライブラリプロジェクトが必要な場合は `--library-project` を使います。出力先は利用者が所有する既存の csproj で、参照は通常どおり `PackageReference` と `ProjectReference` で記述します。ツールは生成ファイルと props ファイルをその隣に書き出すだけで、csproj は変更しません。次の記述は利用者が追加してください。
 
 ```xml
 <PropertyGroup>
