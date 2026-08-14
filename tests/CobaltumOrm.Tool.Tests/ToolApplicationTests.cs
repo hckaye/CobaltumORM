@@ -35,7 +35,7 @@ public sealed class ToolApplicationTests
         Assert.Contains("<CobaltumOrmMigrationProject>true</CobaltumOrmMigrationProject>", project);
         Assert.Contains("<CobaltumOrmDatabaseProvider>PostgreSql</CobaltumOrmDatabaseProvider>", project);
         Assert.Contains("<CompilerVisibleProperty Include=\"CobaltumOrmDatabaseProvider\" />", project);
-        Assert.Contains("<PackageReference Include=\"CobaltumOrm\" Version=\"0.0.5\" />", project);
+        Assert.Contains("<PackageReference Include=\"CobaltumOrm\" Version=\"0.0.6\" />", project);
         Assert.Contains("<PackageReference Include=\"CobaltumOrm.Migrations.PostgreSql\"", project);
         Assert.Contains("<PackageReference Include=\"Npgsql\" Version=\"10.0.3\" />", project);
         Assert.Contains("CopyToOutputDirectory=\"PreserveNewest\"", project);
