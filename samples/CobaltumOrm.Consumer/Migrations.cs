@@ -2,6 +2,7 @@ using CobaltumOrm.Migrations;
 
 namespace CobaltumOrm.Sample;
 
+// <snippet migration-csharp>
 [Migration(10, "create users")]
 public sealed class CreateUsersMigration : Migration
 {
@@ -18,6 +19,7 @@ public sealed class CreateUsersMigration : Migration
         Delete.Table("users").InSchema("app");
     }
 }
+// </snippet>
 
 [Migration(30, "add created at")]
 public sealed class AddCreatedAtMigration : Migration
