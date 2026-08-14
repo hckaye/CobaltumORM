@@ -97,7 +97,8 @@ public sealed class GenerationDiagnostic
         int startColumn,
         int endLine,
         int endColumn,
-        bool isError)
+        bool isError,
+        string? helpUri = null)
     {
         Code = code;
         Message = message;
@@ -107,6 +108,7 @@ public sealed class GenerationDiagnostic
         EndLine = endLine;
         EndColumn = endColumn;
         IsError = isError;
+        HelpUri = helpUri;
     }
 
     /// <summary>The diagnostic identifier, for example SQL203 or COB104.</summary>
@@ -132,6 +134,9 @@ public sealed class GenerationDiagnostic
 
     /// <summary>True when the diagnostic stops generation.</summary>
     public bool IsError { get; }
+
+    /// <summary>A documentation URL for this diagnostic, when the reporting descriptor has one.</summary>
+    public string? HelpUri { get; }
 }
 
 /// <summary>The outcome of a generation run.</summary>

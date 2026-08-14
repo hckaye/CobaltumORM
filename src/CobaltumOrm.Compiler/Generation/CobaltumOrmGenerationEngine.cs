@@ -1095,7 +1095,8 @@ public sealed class CobaltumOrmGenerationEngine
             lineSpan.StartLinePosition.Character + 1,
             lineSpan.EndLinePosition.Line + 1,
             lineSpan.EndLinePosition.Character + 1,
-            isError));
+            isError,
+            diagnostic.Descriptor.HelpLinkUri));
     }
 
     private void AddSourceError(string code, string message, Location location)
@@ -1109,12 +1110,22 @@ public sealed class CobaltumOrmGenerationEngine
             lineSpan.StartLinePosition.Character + 1,
             lineSpan.EndLinePosition.Line + 1,
             lineSpan.EndLinePosition.Character + 1,
-            true));
+            true,
+            GenerationDiagnosticHelpLinks.ForCode(code)));
     }
 
     private void AddError(string code, string message, string? filePath)
     {
-        Add(new GenerationDiagnostic(code, message, filePath, 0, 0, 0, 0, true));
+        Add(new GenerationDiagnostic(
+            code,
+            message,
+            filePath,
+            0,
+            0,
+            0,
+            0,
+            true,
+            GenerationDiagnosticHelpLinks.ForCode(code)));
     }
 
     private void Add(GenerationDiagnostic diagnostic)
@@ -1294,5 +1305,23 @@ public sealed class CobaltumOrmGenerationEngine
         internal int Index { get; }
         internal TypeEnvironment TypeEnvironment { get; set; } = null!;
         internal bool UseDatabaseTypeNames { get; set; }
+    }
+}
+
+internal static class GenerationDiagnosticHelpLinks
+{
+    private const string Prefix =
+        "https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/diagnostics.md#";
+
+    public static string? ForCode(string? code)
+    {
+        if (code is null || code.Length != 6 || !code.StartsWith("COB", StringComparison.Ordinal) ||
+            !int.TryParse(code.Substring(3), NumberStyles.None, CultureInfo.InvariantCulture, out var number) ||
+            (number is not (>= 1 and <= 10) and not (>= 100 and <= 109)))
+        {
+            return null;
+        }
+
+        return Prefix + code.ToLowerInvariant();
     }
 }

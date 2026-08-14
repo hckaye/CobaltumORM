@@ -14,7 +14,7 @@ internal sealed class MsBuildProjectEvaluator : IProjectEvaluator
 
     public async Task<ProjectEvaluation> EvaluateAsync(
         string projectPath,
-        GenerateOptions options,
+        ProjectEvaluationOptions options,
         TextWriter log,
         CancellationToken cancellationToken)
     {
@@ -64,6 +64,16 @@ internal sealed class MsBuildProjectEvaluator : IProjectEvaluator
             var (exitCode, output) = await RunAsync(startInfo, cancellationToken).ConfigureAwait(false);
             if (exitCode != 0)
             {
+                if (options.Framework is null && await HasAmbiguousTargetFrameworkAsync(
+                        projectPath,
+                        options.Configuration,
+                        cancellationToken).ConfigureAwait(false))
+                {
+                    throw new ToolExecutionException(
+                        $"Project '{projectPath}' targets more than one framework. " +
+                        "Pass --framework to select one target framework.");
+                }
+
                 throw new ToolExecutionException(
                     "MSBuild could not evaluate '" + projectPath + "'." +
                     Environment.NewLine + output.Trim());
@@ -123,6 +133,36 @@ internal sealed class MsBuildProjectEvaluator : IProjectEvaluator
 
         return (process.ExitCode, await standardOutput.ConfigureAwait(false) +
             await standardError.ConfigureAwait(false));
+    }
+
+    private static async Task<bool> HasAmbiguousTargetFrameworkAsync(
+        string projectPath,
+        string configuration,
+        CancellationToken cancellationToken)
+    {
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = Path.GetDirectoryName(projectPath)!,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("msbuild");
+        startInfo.ArgumentList.Add(projectPath);
+        startInfo.ArgumentList.Add("-nologo");
+        startInfo.ArgumentList.Add("-getProperty:TargetFrameworks");
+        startInfo.ArgumentList.Add("-property:Configuration=" + configuration);
+        var (exitCode, output) = await RunAsync(startInfo, cancellationToken).ConfigureAwait(false);
+        if (exitCode != 0)
+        {
+            return false;
+        }
+
+        return output
+            .Trim()
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Length > 1;
     }
 
     private static void TryDeleteDirectory(string path)
