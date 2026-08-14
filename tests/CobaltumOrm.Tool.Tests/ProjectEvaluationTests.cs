@@ -136,7 +136,7 @@ public sealed class ProjectEvaluationTests
             CancellationToken.None);
 
         Assert.Contains(
-            new EvaluatedPackageReference("CobaltumOrm", "1.0.0"),
+            new EvaluatedPackageReference("CobaltumOrm", "0.0.5"),
             evaluation.CobaltumOrmPackageReferences);
         Assert.Contains(
             new EvaluatedPackageReference("CobaltumOrm.Migrations", "0.0.4"),
@@ -183,7 +183,7 @@ public sealed class ProjectEvaluationTests
                     <CentralPackageVersionOverrideEnabled>true</CentralPackageVersionOverrideEnabled>
                   </PropertyGroup>
                   <ItemGroup>
-                    <PackageVersion Include="CobaltumOrm" Version="1.0.0" />
+                    <PackageVersion Include="CobaltumOrm" Version="0.0.5" />
                     <PackageVersion Include="CobaltumOrm.Migrations" Version="1.0.0" />
                   </ItemGroup>
                 </Project>
