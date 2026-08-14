@@ -17,6 +17,9 @@ English | [日本語](README.ja.md)
 CobaltumORM is a .NET / C# ORM whose main target is PostgreSQL. Its migration system and
 compile-time SQL analysis support PostgreSQL, MySQL, SQLite, SQL Server, and Oracle.
 
+For coding agents: [quick reference](docs/ai/quick-reference.md), [task recipes](docs/ai/recipes.md),
+[build diagnostics](docs/ai/diagnostics.md), and the [llms.txt](llms.txt) index.
+
 ## Table of contents
 
 - [Features](#features)
