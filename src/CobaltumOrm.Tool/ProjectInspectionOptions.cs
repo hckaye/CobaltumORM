@@ -6,14 +6,17 @@ internal enum ProjectInspectionFormat
     Json,
 }
 
-/// <summary>Options shared by the inspect and doctor commands.</summary>
+/// <summary>Options shared by commands that evaluate a project without publishing generated files.</summary>
 internal sealed class ProjectInspectionOptions : ProjectEvaluationOptions
 {
     public string? Project { get; set; }
 
     public ProjectInspectionFormat Format { get; set; } = ProjectInspectionFormat.Text;
 
-    public static ProjectInspectionOptions Parse(string[] args, string command)
+    public static ProjectInspectionOptions Parse(
+        string[] args,
+        string command,
+        bool allowFormat = true)
     {
         var options = new ProjectInspectionOptions();
         for (var index = 1; index < args.Length; index++)
@@ -39,7 +42,7 @@ internal sealed class ProjectInspectionOptions : ProjectEvaluationOptions
                     options.NoRestore = true;
                     break;
 
-                case "--format":
+                case "--format" when allowFormat:
                     options.Format = ParseFormat(ReadValue(args, ref index));
                     break;
 
