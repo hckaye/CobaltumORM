@@ -3,8 +3,9 @@
 English | [日本語](quick-reference.ja.md)
 
 Select query APIs from the table below. Generated names, provider settings, and required
-verification commands follow. Full documentation is in [README.md](../../README.md), worked
-examples are in [recipes.md](recipes.md), and build errors are in [diagnostics.md](diagnostics.md).
+verification commands follow. Start coding-agent setup with [agent-tools.md](agent-tools.md). Full
+documentation is in [README.md](../../README.md), worked examples are in [recipes.md](recipes.md),
+and build errors are in [diagnostics.md](diagnostics.md).
 
 ## What CobaltumORM does
 

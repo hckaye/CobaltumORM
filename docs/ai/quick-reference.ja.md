@@ -3,8 +3,9 @@
 [English](quick-reference.md) | 日本語
 
 下の表からクエリ API を選んでください。生成される型の名前、プロバイダー設定、必要な確認コマンドが
-続きます。詳細な説明は [README.ja.md](../../README.ja.md)、作業単位の実例は [recipes.ja.md](recipes.ja.md)、
-ビルドエラーは [diagnostics.ja.md](diagnostics.ja.md) にあります。
+続きます。コーディングエージェントのセットアップは [agent-tools.ja.md](agent-tools.ja.md) から始めます。
+詳細な説明は [README.ja.md](../../README.ja.md)、作業単位の実例は [recipes.ja.md](recipes.ja.md)、ビルドエラーは
+[diagnostics.ja.md](diagnostics.ja.md) にあります。
 
 ## CobaltumORM の役割
 

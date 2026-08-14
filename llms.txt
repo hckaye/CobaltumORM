@@ -14,6 +14,8 @@ a query, a migration, a result type, or the provider setting.
 
 ## AI documentation
 
+- [Coding agent tools (English)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/agent-tools.md): existing-project setup, assistant instructions, project reports, and MCP configuration
+- [Coding agent tools (Japanese)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/agent-tools.ja.md): 日本語版のコーディングエージェント用ツール
 - [Quick reference (English)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/quick-reference.md): API choice, build-enforced rules, generated names, providers, verification
 - [Quick reference (Japanese)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/quick-reference.ja.md): 日本語版のクイックリファレンス
 - [Task recipes (English)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/recipes.md): one compiled example per task, from migrations to unchecked SQL

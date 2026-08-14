@@ -32,6 +32,8 @@ public class AiDocumentationTests
 
     private static readonly string[] PairedDocuments =
     {
+        "docs/ai/agent-tools.md",
+        "docs/ai/agent-tools.ja.md",
         "docs/ai/quick-reference.md",
         "docs/ai/quick-reference.ja.md",
         "docs/ai/recipes.md",
@@ -172,6 +174,7 @@ public class AiDocumentationTests
             var links = Regex.Matches(File.ReadAllText(path), @"\]\(([^)#:]+)(?:#[^)]*)?\)")
                 .Select(match => match.Groups[1].Value)
                 .Where(target => target.Length != 0)
+                .Where(target => !Uri.TryCreate(target, UriKind.Absolute, out _))
                 .Distinct(StringComparer.Ordinal);
 
             foreach (var link in links)
