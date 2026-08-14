@@ -34,41 +34,22 @@ internal sealed class GenerateCommand
         var projectPath = ResolveProject(options.Project);
         var libraryProjectPath = ResolveLibraryProject(options);
         ValidateOutputPath(options, Path.GetDirectoryName(projectPath)!, libraryProjectPath);
-        var evaluation = await _evaluator
+        var analysisService = new ProjectAnalysisService(_evaluator);
+        var evaluation = await analysisService
             .EvaluateAsync(projectPath, options, _output, cancellationToken)
             .ConfigureAwait(false);
-        if (evaluation.TargetFramework.Length == 0)
-        {
-            throw new ToolExecutionException(
-                $"Project '{projectPath}' did not report a target framework. " +
-                "Pass --framework when the project targets more than one framework.");
-        }
-
-        if (evaluation.ProjectDirectory.Length == 0)
-        {
-            evaluation.ProjectDirectory = Path.GetDirectoryName(projectPath)!;
-        }
 
         var outputDirectory = ResolveOutputDirectory(options, evaluation, libraryProjectPath);
         var generatedNamespace = options.GeneratedNamespace ?? NullIfEmpty(evaluation.GeneratedNamespace);
         var provider = options.Provider ?? NullIfEmpty(evaluation.DatabaseProvider);
-
-        var result = CobaltumOrmGenerationEngine.Run(new GenerationRequest
-        {
-            SourcePaths = evaluation.CompileFiles,
-            ReferencePaths = evaluation.References,
-            AdditionalFilePaths = evaluation.AdditionalFiles,
-            MigrationSourcePaths = evaluation.MigrationSources,
-            OutputDirectory = outputDirectory,
-            DefineConstants = evaluation.DefineConstants,
-            LangVersion = evaluation.LangVersion,
-            Nullable = evaluation.Nullable,
-            GeneratedNamespace = generatedNamespace,
-            DatabaseProvider = provider,
-            AnalysisCacheDirectory = NullIfEmpty(evaluation.AnalysisCacheDirectory),
-            AnalysisCacheEnabled = evaluation.AnalysisCacheEnabled,
-            IncludeGeneratorOutput = true,
-        });
+        var result = analysisService.Analyze(
+            evaluation,
+            new ProjectGenerationOptions
+            {
+                OutputDirectory = outputDirectory,
+                GeneratedNamespace = generatedNamespace,
+                DatabaseProvider = provider,
+            }).Generation;
 
         foreach (var diagnostic in result.Diagnostics)
         {
@@ -177,54 +158,28 @@ internal sealed class GenerateCommand
 
     private string ResolveProject(string? project)
     {
-        if (project is null)
+        if (project is not null)
         {
-            var candidates = Directory
-                .EnumerateFiles(_currentDirectory, "*.csproj", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToArray();
-            if (candidates.Length == 0)
-            {
-                throw new ToolUsageException(
-                    $"No project file was found in '{_currentDirectory}'. Specify one with --project.");
-            }
-
-            if (candidates.Length > 1)
-            {
-                throw new ToolUsageException(
-                    $"More than one project file was found in '{_currentDirectory}'. Specify one with --project.");
-            }
-
-            return candidates[0];
+            return ProjectPathResolver.Resolve(project, _currentDirectory);
         }
 
-        var resolved = Path.GetFullPath(project, _currentDirectory);
-        if (Directory.Exists(resolved))
+        var candidates = Directory
+            .EnumerateFiles(_currentDirectory, "*.csproj", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        if (candidates.Length == 0)
         {
-            var candidates = Directory
-                .EnumerateFiles(resolved, "*.csproj", SearchOption.TopDirectoryOnly)
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToArray();
-            if (candidates.Length != 1)
-            {
-                throw new ToolUsageException(
-                    $"Directory '{resolved}' must contain exactly one project file.");
-            }
-
-            return candidates[0];
+            throw new ToolUsageException(
+                $"No project file was found in '{_currentDirectory}'. Specify one with --project.");
         }
 
-        if (!File.Exists(resolved))
+        if (candidates.Length > 1)
         {
-            throw new ToolUsageException($"Project path '{resolved}' does not exist.");
+            throw new ToolUsageException(
+                $"More than one project file was found in '{_currentDirectory}'. Specify one with --project.");
         }
 
-        if (!string.Equals(Path.GetExtension(resolved), ".csproj", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ToolUsageException($"Project path '{resolved}' is not a .csproj file.");
-        }
-
-        return resolved;
+        return candidates[0];
     }
 
     private string? ResolveLibraryProject(GenerateOptions options)

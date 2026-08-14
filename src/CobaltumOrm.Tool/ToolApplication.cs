@@ -48,6 +48,82 @@ internal sealed class ToolApplication
                     .ConfigureAwait(false);
             }
 
+            if (string.Equals(args[0], "inspect", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                return await new InspectCommand(_output, _projectEvaluator, _currentDirectory)
+                    .RunAsync(ProjectInspectionOptions.Parse(args, "inspect"), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (string.Equals(args[0], "doctor", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                return await new DoctorCommand(_output, _projectEvaluator, _currentDirectory)
+                    .RunAsync(ProjectInspectionOptions.Parse(args, "doctor"), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (string.Equals(args[0], "mcp", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                return await new McpCommand(_error, _projectEvaluator, _currentDirectory)
+                    .RunAsync(
+                        ProjectInspectionOptions.Parse(args, "mcp", allowFormat: false),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (string.Equals(args[0], "assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length == 1 || IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                if (!string.Equals(args[1], "init", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ToolUsageException($"Unknown assistant command '{args[1]}'.");
+                }
+
+                if (args.Length > 2 && IsHelp(args[2]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                new AssistantInitCommand(_output, _currentDirectory).Run(AssistantInitOptions.Parse(args));
+                return 0;
+            }
+
+            if (string.Equals(args[0], "add", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                new AddCommand(_output, _currentDirectory).Run(AddOptions.Parse(args));
+                return 0;
+            }
+
             if (!string.Equals(args[0], "migrations", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(args[0], "migration", StringComparison.OrdinalIgnoreCase))
             {
@@ -438,6 +514,11 @@ internal sealed class ToolApplication
         writer.WriteLine();
         writer.WriteLine("Usage:");
         writer.WriteLine("  cobaltum generate [--project <path>] [--output-mode <mode>] [--output <dir>]");
+        writer.WriteLine("  cobaltum inspect --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
+        writer.WriteLine("  cobaltum doctor --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
+        writer.WriteLine("  cobaltum mcp --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore]");
+        writer.WriteLine("  cobaltum assistant init --project <path> [--target auto|agents|claude|cursor|copilot|all]");
+        writer.WriteLine("  cobaltum add --project <path> --migration-project <path> [options]");
         writer.WriteLine("  cobaltum migrations init <project-name> [--provider <name>] [--output <path>] [--framework <tfm>]");
         writer.WriteLine("  cobaltum migrations add <name> [--version <number>] [--project <path>]");
         writer.WriteLine("  cobaltum migrations list [--project <path>]");
@@ -461,6 +542,17 @@ internal sealed class ToolApplication
         writer.WriteLine("      --write-schema         Write final schema JSON after migrations up");
         writer.WriteLine("      --version <number>     Version for a new migration");
         writer.WriteLine();
+        writer.WriteLine("Add options:");
+        writer.WriteLine("  -p, --project <path>       Existing application or query .csproj");
+        writer.WriteLine("  -m, --migration-project <path>");
+        writer.WriteLine("                             Existing migration .csproj");
+        writer.WriteLine("      --generated-namespace <ns>");
+        writer.WriteLine("                             Namespace for generated code (default: migration RootNamespace)");
+        writer.WriteLine("      --provider <name>      Provider for a newly created or manually configured migration project");
+        writer.WriteLine("  -f, --framework <tfm>      Framework for a newly created migration project");
+        writer.WriteLine("      --create-migration-project");
+        writer.WriteLine("                             Create the missing migration project without replacing files");
+        writer.WriteLine();
         writer.WriteLine("Generate options:");
         writer.WriteLine("      --output-mode <mode>   intermediate (default), directory, or library");
         writer.WriteLine("                             intermediate writes under the project obj directory");
@@ -473,6 +565,25 @@ internal sealed class ToolApplication
         writer.WriteLine("      --provider <name>      Database provider when it is not set in the project");
         writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
         writer.WriteLine("      --verbose              Print the MSBuild command and its output");
+        writer.WriteLine();
+        writer.WriteLine("Inspect, doctor, and MCP options:");
+        writer.WriteLine("  -p, --project <path>       Application or query .csproj file, or its directory");
+        writer.WriteLine("  -c, --configuration <name> Build configuration (default: Debug)");
+        writer.WriteLine("  -f, --framework <tfm>      Target framework when the project targets more than one");
+        writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
+        writer.WriteLine("      --format <format>      text (default) or json");
+        writer.WriteLine("                             --format is available only for inspect and doctor");
+        writer.WriteLine();
+        writer.WriteLine("Assistant init options:");
+        writer.WriteLine("  -p, --project <path>       Existing .csproj file or a directory containing one project");
+        writer.WriteLine("      --target <target>      auto (default), agents, claude, cursor, copilot, or all");
+        writer.WriteLine("                            auto creates .cobaltum/assistant.md, updates detected adapters,");
+        writer.WriteLine("                            and creates AGENTS.md when no adapter is present.");
+        writer.WriteLine("                            agents, claude, cursor, and copilot select their matching adapter.");
+        writer.WriteLine("                            all writes AGENTS.md, CLAUDE.md, .cursor/rules/cobaltum.mdc,");
+        writer.WriteLine("                            and .github/copilot-instructions.md.");
+        writer.WriteLine("                            Re-running the same options changes only CobaltumORM-managed blocks");
+        writer.WriteLine("                            and reports unchanged files.");
     }
 }
 

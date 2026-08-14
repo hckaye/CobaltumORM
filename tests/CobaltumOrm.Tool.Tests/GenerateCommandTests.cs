@@ -396,13 +396,13 @@ public sealed class GenerateCommandTests
             _evaluation = evaluation;
         }
 
-        public GenerateOptions? LastOptions { get; private set; }
+        public ProjectEvaluationOptions? LastOptions { get; private set; }
 
         public string? LastProjectPath { get; private set; }
 
         public Task<ProjectEvaluation> EvaluateAsync(
             string projectPath,
-            GenerateOptions options,
+            ProjectEvaluationOptions options,
             TextWriter log,
             CancellationToken cancellationToken)
         {

@@ -1,0 +1,35 @@
+# CobaltumORM
+
+> A .NET / C# ORM for hand-written SQL. The build parses the SQL, checks it against the schema that
+> the migrations produce, and generates the executing C#. PostgreSQL is the primary target; MySQL,
+> SQLite, SQL Server, and Oracle are also supported.
+
+Start with the quick reference. It states which API to use in each situation and which rules the
+build enforces. The recipes give one compiled example per task, and the diagnostics page lists every
+`COB` code the build can report. Each page has an English and a Japanese version with the same
+content.
+
+The SQL checks run during compilation, so `dotnet build` is the verification step for any change to
+a query, a migration, a result type, or the provider setting.
+
+## AI documentation
+
+- [Coding agent tools (English)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/agent-tools.md): existing-project setup, assistant instructions, project reports, and MCP configuration
+- [Coding agent tools (Japanese)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/agent-tools.ja.md): 日本語版のコーディングエージェント用ツール
+- [Quick reference (English)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/quick-reference.md): API choice, build-enforced rules, generated names, providers, verification
+- [Quick reference (Japanese)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/quick-reference.ja.md): 日本語版のクイックリファレンス
+- [Task recipes (English)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/recipes.md): one compiled example per task, from migrations to unchecked SQL
+- [Task recipes (Japanese)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/recipes.ja.md): 日本語版のタスク別レシピ
+- [Build diagnostics (English)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/diagnostics.md): every COB code with its cause and fix
+- [Build diagnostics (Japanese)](https://github.com/hckaye/CobaltumORM/blob/main/docs/ai/diagnostics.ja.md): 日本語版のビルド診断一覧
+
+## Full documentation
+
+- [README (English)](https://github.com/hckaye/CobaltumORM/blob/main/README.md): installation, project configuration, CLI, generation, supported syntax
+- [README (Japanese)](https://github.com/hckaye/CobaltumORM/blob/main/README.ja.md): 日本語版の README
+
+## Optional
+
+- [Supported PostgreSQL SELECT syntax](https://github.com/hckaye/CobaltumORM/blob/main/docs/design/poc-sql-type-inference.md): what the query analyzer parses and how it infers CLR types
+- [Build and runtime integration](https://github.com/hckaye/CobaltumORM/blob/main/docs/design/build-and-runtime-integration.md): how the generator, the MSBuild transform, and the CLI fit together
+- [Compiled examples](https://github.com/hckaye/CobaltumORM/blob/main/samples/CobaltumOrm.Consumer): the sample project that compiles every code block in the AI documentation
