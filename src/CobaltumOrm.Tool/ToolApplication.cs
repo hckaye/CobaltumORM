@@ -74,6 +74,21 @@ internal sealed class ToolApplication
                     .ConfigureAwait(false);
             }
 
+            if (string.Equals(args[0], "mcp", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                return await new McpCommand(_error, _projectEvaluator, _currentDirectory)
+                    .RunAsync(
+                        ProjectInspectionOptions.Parse(args, "mcp", allowFormat: false),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             if (string.Equals(args[0], "assistant", StringComparison.OrdinalIgnoreCase))
             {
                 if (args.Length == 1 || IsHelp(args[1]))
@@ -501,6 +516,7 @@ internal sealed class ToolApplication
         writer.WriteLine("  cobaltum generate [--project <path>] [--output-mode <mode>] [--output <dir>]");
         writer.WriteLine("  cobaltum inspect --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
         writer.WriteLine("  cobaltum doctor --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
+        writer.WriteLine("  cobaltum mcp --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore]");
         writer.WriteLine("  cobaltum assistant init --project <path> [--target auto|agents|claude|cursor|copilot|all]");
         writer.WriteLine("  cobaltum add --project <path> --migration-project <path> [options]");
         writer.WriteLine("  cobaltum migrations init <project-name> [--provider <name>] [--output <path>] [--framework <tfm>]");
@@ -550,12 +566,13 @@ internal sealed class ToolApplication
         writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
         writer.WriteLine("      --verbose              Print the MSBuild command and its output");
         writer.WriteLine();
-        writer.WriteLine("Inspect and doctor options:");
+        writer.WriteLine("Inspect, doctor, and MCP options:");
         writer.WriteLine("  -p, --project <path>       Application or query .csproj file, or its directory");
         writer.WriteLine("  -c, --configuration <name> Build configuration (default: Debug)");
         writer.WriteLine("  -f, --framework <tfm>      Target framework when the project targets more than one");
         writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
         writer.WriteLine("      --format <format>      text (default) or json");
+        writer.WriteLine("                             --format is available only for inspect and doctor");
         writer.WriteLine();
         writer.WriteLine("Assistant init options:");
         writer.WriteLine("  -p, --project <path>       Existing .csproj file or a directory containing one project");

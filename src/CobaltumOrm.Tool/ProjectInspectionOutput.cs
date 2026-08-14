@@ -155,10 +155,7 @@ internal static class ProjectInspectionOutput
     {
         writer.WritePropertyName("generatedArtifacts");
         writer.WriteStartArray();
-        foreach (var artifact in artifacts
-                     .OrderBy(item => item.FileName, StringComparer.Ordinal)
-                     .ThenBy(item => item.Kind)
-                     .ThenBy(item => item.SourcePath, StringComparer.Ordinal))
+        foreach (var artifact in OrderGeneratedArtifacts(artifacts))
         {
             writer.WriteStartObject();
             writer.WriteString("fileName", artifact.FileName);
@@ -247,7 +244,13 @@ internal static class ProjectInspectionOutput
         writer.WriteString(propertyName, value);
     }
 
-    private static string ArtifactKindText(GeneratedArtifactKind kind) => kind switch
+    internal static IEnumerable<GeneratedArtifact> OrderGeneratedArtifacts(
+        IEnumerable<GeneratedArtifact> artifacts) => artifacts
+        .OrderBy(item => item.FileName, StringComparer.Ordinal)
+        .ThenBy(item => item.Kind)
+        .ThenBy(item => item.SourcePath, StringComparer.Ordinal);
+
+    internal static string ArtifactKindText(GeneratedArtifactKind kind) => kind switch
     {
         GeneratedArtifactKind.Generated => "generated",
         GeneratedArtifactKind.Transformed => "transformed",
