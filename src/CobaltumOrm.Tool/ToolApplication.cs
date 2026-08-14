@@ -74,6 +74,29 @@ internal sealed class ToolApplication
                     .ConfigureAwait(false);
             }
 
+            if (string.Equals(args[0], "assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length == 1 || IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                if (!string.Equals(args[1], "init", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new ToolUsageException($"Unknown assistant command '{args[1]}'.");
+                }
+
+                if (args.Length > 2 && IsHelp(args[2]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                new AssistantInitCommand(_output, _currentDirectory).Run(AssistantInitOptions.Parse(args));
+                return 0;
+            }
+
             if (string.Equals(args[0], "add", StringComparison.OrdinalIgnoreCase))
             {
                 if (args.Length > 1 && IsHelp(args[1]))
@@ -478,6 +501,7 @@ internal sealed class ToolApplication
         writer.WriteLine("  cobaltum generate [--project <path>] [--output-mode <mode>] [--output <dir>]");
         writer.WriteLine("  cobaltum inspect --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
         writer.WriteLine("  cobaltum doctor --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
+        writer.WriteLine("  cobaltum assistant init --project <path> [--target auto|agents|claude|cursor|copilot|all]");
         writer.WriteLine("  cobaltum add --project <path> --migration-project <path> [options]");
         writer.WriteLine("  cobaltum migrations init <project-name> [--provider <name>] [--output <path>] [--framework <tfm>]");
         writer.WriteLine("  cobaltum migrations add <name> [--version <number>] [--project <path>]");
@@ -532,6 +556,17 @@ internal sealed class ToolApplication
         writer.WriteLine("  -f, --framework <tfm>      Target framework when the project targets more than one");
         writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
         writer.WriteLine("      --format <format>      text (default) or json");
+        writer.WriteLine();
+        writer.WriteLine("Assistant init options:");
+        writer.WriteLine("  -p, --project <path>       Existing .csproj file or a directory containing one project");
+        writer.WriteLine("      --target <target>      auto (default), agents, claude, cursor, copilot, or all");
+        writer.WriteLine("                            auto creates .cobaltum/assistant.md, updates detected adapters,");
+        writer.WriteLine("                            and creates AGENTS.md when no adapter is present.");
+        writer.WriteLine("                            agents, claude, cursor, and copilot select their matching adapter.");
+        writer.WriteLine("                            all writes AGENTS.md, CLAUDE.md, .cursor/rules/cobaltum.mdc,");
+        writer.WriteLine("                            and .github/copilot-instructions.md.");
+        writer.WriteLine("                            Re-running the same options changes only CobaltumORM-managed blocks");
+        writer.WriteLine("                            and reports unchanged files.");
     }
 }
 
