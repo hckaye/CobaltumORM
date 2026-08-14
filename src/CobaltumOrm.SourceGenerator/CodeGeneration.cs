@@ -146,6 +146,13 @@ internal sealed class TypeEnvironment
     {
         var nullable = analyzerType.EndsWith("?", StringComparison.Ordinal);
         var baseName = nullable ? analyzerType.Substring(0, analyzerType.Length - 1) : analyzerType;
+        var arrayRank = 0;
+        while (baseName.EndsWith("[]", StringComparison.Ordinal))
+        {
+            arrayRank++;
+            baseName = baseName.Substring(0, baseName.Length - 2);
+        }
+
         string result;
         switch (baseName)
         {
@@ -163,8 +170,13 @@ internal sealed class TypeEnvironment
             case "DateTime": result = "global::System.DateTime"; break;
             case "DateTimeOffset": result = "global::System.DateTimeOffset"; break;
             case "TimeSpan": result = "global::System.TimeSpan"; break;
-            case "byte[]": result = "global::System.Byte[]"; break;
+            case "byte": result = "global::System.Byte"; break;
             default: result = "global::System.Object"; break;
+        }
+
+        while (arrayRank-- > 0)
+        {
+            result += "[]";
         }
 
         return nullable ? result + "?" : result;
@@ -182,6 +194,11 @@ internal sealed class TypeEnvironment
         var baseName = analyzerType.EndsWith("?", StringComparison.Ordinal)
             ? analyzerType.Substring(0, analyzerType.Length - 1)
             : analyzerType;
+        if (baseName.EndsWith("[]", StringComparison.Ordinal))
+        {
+            return baseName == "byte[]" ? "Binary" : "Object";
+        }
+
         switch (baseName)
         {
             case "bool": return "Boolean";
@@ -198,7 +215,6 @@ internal sealed class TypeEnvironment
             case "DateTime": return "DateTime2";
             case "DateTimeOffset": return "DateTimeOffset";
             case "TimeSpan": return "Time";
-            case "byte[]": return "Binary";
             default: return "Object";
         }
     }
@@ -400,10 +416,10 @@ internal static class GeneratedSourceWriter
             for (var index = 0; index < table.Columns.Count; index++)
             {
                 var column = table.Columns[index];
-                SqlValueKind columnKind;
+                var postgreSqlMapper = dialect.TypeMapper as PostgreSqlTypeMapper;
                 var databaseTypeName = dialect.Provider == DatabaseProvider.PostgreSql &&
-                    dialect.TypeMapper.TryMap(column.SqlType, out columnKind)
-                    ? dialect.TypeMapper.ToDatabaseTypeName(columnKind)
+                    postgreSqlMapper != null && postgreSqlMapper.TryMapType(column.SqlType, out var columnType)
+                    ? postgreSqlMapper.ToDatabaseTypeName(columnType)
                     : null;
                 builder.Append("    public global::CobaltumOrm.CobaltumColumn<").Append(recordName).Append(", ")
                     .Append(environment.TypeName(query.Columns[index].ClrType)).Append("> ")

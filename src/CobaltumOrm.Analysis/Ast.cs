@@ -310,6 +310,7 @@ internal sealed class TableReference
         Name = name;
         Alias = alias;
         Subquery = null;
+        Function = null;
         ColumnAliases = columnAliases ?? new List<SqlIdentifier>();
         Lateral = false;
     }
@@ -326,12 +327,30 @@ internal sealed class TableReference
         Subquery = subquery;
         ColumnAliases = columnAliases;
         Lateral = lateral;
+        Function = null;
+    }
+
+    internal TableReference(
+        FunctionExpression function,
+        SqlIdentifier effectiveName,
+        SqlIdentifier? alias,
+        IReadOnlyList<SqlIdentifier> columnAliases,
+        bool lateral)
+    {
+        Schema = null;
+        Name = effectiveName;
+        Alias = alias;
+        Subquery = null;
+        ColumnAliases = columnAliases;
+        Lateral = lateral;
+        Function = function;
     }
 
     internal SqlIdentifier? Schema { get; }
     internal SqlIdentifier Name { get; }
     internal SqlIdentifier? Alias { get; }
     internal SqlStatement? Subquery { get; }
+    internal FunctionExpression? Function { get; }
     internal IReadOnlyList<SqlIdentifier> ColumnAliases { get; }
     internal bool Lateral { get; }
 }
@@ -439,6 +458,51 @@ internal sealed class ParameterExpression : Expression
 {
     internal ParameterExpression(string name, SourceSpan span) : base(span) => Name = name;
     internal string Name { get; }
+}
+
+internal sealed class ArrayExpression : Expression
+{
+    internal ArrayExpression(IReadOnlyList<Expression> elements, SourceSpan span) : base(span) => Elements = elements;
+    internal IReadOnlyList<Expression> Elements { get; }
+}
+
+internal sealed class ArraySubscriptExpression : Expression
+{
+    internal ArraySubscriptExpression(Expression array, Expression index, SourceSpan span) : base(span)
+    {
+        Array = array;
+        Index = index;
+    }
+
+    internal Expression Array { get; }
+    internal Expression Index { get; }
+}
+
+internal enum QuantifierKind
+{
+    Any,
+    All,
+}
+
+internal sealed class QuantifiedComparisonExpression : Expression
+{
+    internal QuantifiedComparisonExpression(
+        Expression left,
+        string op,
+        QuantifierKind quantifier,
+        Expression array,
+        SourceSpan span) : base(span)
+    {
+        Left = left;
+        Operator = op;
+        Quantifier = quantifier;
+        Array = array;
+    }
+
+    internal Expression Left { get; }
+    internal string Operator { get; }
+    internal QuantifierKind Quantifier { get; }
+    internal Expression Array { get; }
 }
 
 internal sealed class DefaultExpression : Expression

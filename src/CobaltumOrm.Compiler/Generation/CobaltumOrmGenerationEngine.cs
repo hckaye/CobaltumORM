@@ -832,6 +832,13 @@ public sealed class CobaltumOrmGenerationEngine
     {
         var nullable = analyzerType.EndsWith("?", StringComparison.Ordinal);
         var baseName = nullable ? analyzerType.Substring(0, analyzerType.Length - 1) : analyzerType;
+        var arrayRank = 0;
+        while (baseName.EndsWith("[]", StringComparison.Ordinal))
+        {
+            arrayRank++;
+            baseName = baseName.Substring(0, baseName.Length - 2);
+        }
+
         var metadataName = baseName switch
         {
             "bool" => "System.Boolean",
@@ -847,18 +854,24 @@ public sealed class CobaltumOrmGenerationEngine
             "TimeOnly" => compilation.GetTypeByMetadataName("System.TimeOnly") != null ? "System.TimeOnly" : "System.TimeSpan",
             "DateTime" => "System.DateTime",
             "DateTimeOffset" => "System.DateTimeOffset",
-            "byte[]" => "System.Byte",
+            "TimeSpan" => "System.TimeSpan",
+            "byte" => "System.Byte",
             _ => "System.Object",
         };
-        var type = compilation.GetTypeByMetadataName(metadataName);
+        ITypeSymbol? type = compilation.GetTypeByMetadataName(metadataName);
         if (type is null)
         {
             return null;
         }
 
-        if (baseName == "byte[]")
+        while (arrayRank-- > 0)
         {
-            return compilation.CreateArrayTypeSymbol(type);
+            type = compilation.CreateArrayTypeSymbol(type);
+        }
+
+        if (type is IArrayTypeSymbol)
+        {
+            return type.WithNullableAnnotation(NullableAnnotation.Annotated);
         }
 
         if ((nullable || type.IsValueType) && type.IsValueType)

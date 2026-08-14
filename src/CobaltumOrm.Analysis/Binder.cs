@@ -288,8 +288,7 @@ internal sealed class Binder
             {
                 var leftType = result[index].Type;
                 var rightType = right[index].Type;
-                SqlValueKind kind;
-                if (!_types.TryUnify(leftType.Kind, rightType.Kind, out kind))
+                if (!_types.TryUnify(leftType.Type, rightType.Type, out var type))
                 {
                     Report(
                         "SQL207",
@@ -300,7 +299,7 @@ internal sealed class Binder
 
                 result[index] = new BoundColumn(
                     result[index].Name,
-                    new TypeInfo(kind, IsNullable(leftType) || IsNullable(rightType)),
+                    new TypeInfo(type, IsNullable(leftType) || IsNullable(rightType)),
                     result[index].Span);
             }
         }
@@ -381,16 +380,16 @@ internal sealed class Binder
             }
 
             var span = expressions.Count == 0 ? new SourceSpan(0, 0) : expressions[0].Span;
-            var kind = UnifyExpressions(
+            var type = UnifyExpressions(
                 expressions,
                 types,
                 span,
                 $"VALUES column {columnIndex + 1} has incompatible types.");
             result.Add(new BoundColumn(
                 "column" + (columnIndex + 1).ToString(CultureInfo.InvariantCulture),
-                kind == SqlValueKind.Error
+                type.Kind == SqlValueKind.Error
                     ? ErrorType()
-                    : new TypeInfo(kind, types.Any(IsNullable)),
+                    : new TypeInfo(type, types.Any(IsNullable)),
                 span));
         }
 
@@ -482,8 +481,7 @@ internal sealed class Binder
                 : left.Type;
             if (kind == JoinKind.Full)
             {
-                SqlValueKind unified;
-                type = _types.TryUnify(left.Type.Kind, right.Type.Kind, out unified)
+                type = _types.TryUnify(left.Type.Type, right.Type.Type, out var unified)
                     ? new TypeInfo(unified, IsNullable(left.Type) || IsNullable(right.Type))
                     : ErrorType();
             }
@@ -800,7 +798,7 @@ internal sealed class Binder
 
         ValidateAggregatePlacement(expression, AggregateContext.DataModification, 0);
         var target = ColumnType(column, false, expression.Span);
-        var value = BindExpression(expression, target.Kind);
+        var value = BindExpression(expression, target.Type);
         if (!AreCompatible(target, value))
         {
             Report(
@@ -979,6 +977,32 @@ internal sealed class Binder
             return ValidateAggregatePlacement(unary.Operand, context, aggregateDepth);
         }
 
+        var array = expression as ArrayExpression;
+        if (array != null)
+        {
+            var found = false;
+            foreach (var element in array.Elements)
+            {
+                found |= ValidateAggregatePlacement(element, context, aggregateDepth);
+            }
+
+            return found;
+        }
+
+        var subscript = expression as ArraySubscriptExpression;
+        if (subscript != null)
+        {
+            return ValidateAggregatePlacement(subscript.Array, context, aggregateDepth) |
+                ValidateAggregatePlacement(subscript.Index, context, aggregateDepth);
+        }
+
+        var quantified = expression as QuantifiedComparisonExpression;
+        if (quantified != null)
+        {
+            return ValidateAggregatePlacement(quantified.Left, context, aggregateDepth) |
+                ValidateAggregatePlacement(quantified.Array, context, aggregateDepth);
+        }
+
         var binary = expression as BinaryExpression;
         if (binary != null)
         {
@@ -1088,6 +1112,26 @@ internal sealed class Binder
         if (expression is LiteralExpression || expression is ParameterExpression)
         {
             return true;
+        }
+
+        var array = expression as ArrayExpression;
+        if (array != null)
+        {
+            return array.Elements.All(element => IsGroupCompatible(element, groupBy));
+        }
+
+        var subscript = expression as ArraySubscriptExpression;
+        if (subscript != null)
+        {
+            return IsGroupCompatible(subscript.Array, groupBy) &&
+                IsGroupCompatible(subscript.Index, groupBy);
+        }
+
+        var quantified = expression as QuantifiedComparisonExpression;
+        if (quantified != null)
+        {
+            return IsGroupCompatible(quantified.Left, groupBy) &&
+                IsGroupCompatible(quantified.Array, groupBy);
         }
 
         if (expression is StarExpression)
@@ -1254,6 +1298,32 @@ internal sealed class Binder
             return string.Equals(leftParameter.Name, rightParameter.Name, StringComparison.OrdinalIgnoreCase);
         }
 
+        var leftArray = left as ArrayExpression;
+        var rightArray = right as ArrayExpression;
+        if (leftArray != null && rightArray != null)
+        {
+            return leftArray.Elements.Count == rightArray.Elements.Count &&
+                leftArray.Elements.Zip(rightArray.Elements, ExpressionsEquivalent).All(item => item);
+        }
+
+        var leftSubscript = left as ArraySubscriptExpression;
+        var rightSubscript = right as ArraySubscriptExpression;
+        if (leftSubscript != null && rightSubscript != null)
+        {
+            return ExpressionsEquivalent(leftSubscript.Array, rightSubscript.Array) &&
+                ExpressionsEquivalent(leftSubscript.Index, rightSubscript.Index);
+        }
+
+        var leftQuantified = left as QuantifiedComparisonExpression;
+        var rightQuantified = right as QuantifiedComparisonExpression;
+        if (leftQuantified != null && rightQuantified != null)
+        {
+            return leftQuantified.Operator == rightQuantified.Operator &&
+                leftQuantified.Quantifier == rightQuantified.Quantifier &&
+                ExpressionsEquivalent(leftQuantified.Left, rightQuantified.Left) &&
+                ExpressionsEquivalent(leftQuantified.Array, rightQuantified.Array);
+        }
+
         var leftUnary = left as UnaryExpression;
         var rightUnary = right as UnaryExpression;
         if (leftUnary != null && rightUnary != null)
@@ -1372,7 +1442,13 @@ internal sealed class Binder
         }
 
         ScopeTable result;
-        if (reference.Subquery != null)
+        if (reference.Function != null)
+        {
+            var columns = BindTableFunction(reference).ToList();
+            ApplyTableColumnAliases(reference, effectiveName, columns);
+            result = new ScopeTable(columns, effectiveName);
+        }
+        else if (reference.Subquery != null)
         {
             var columns = BindNestedStatement(reference.Subquery, reference.Lateral).ToList();
             ApplyTableColumnAliases(reference, effectiveName, columns);
@@ -1399,6 +1475,97 @@ internal sealed class Binder
 
         _scope.Add(result);
         return result;
+    }
+
+    private IReadOnlyList<BoundColumn> BindTableFunction(TableReference reference)
+    {
+        var function = reference.Function!;
+        var name = function.Name.IsQuoted
+            ? function.Name.Name
+            : function.Name.Name.ToLowerInvariant();
+        if (!(_types.Mapper is PostgreSqlTypeMapper))
+        {
+            foreach (var argument in function.Arguments)
+            {
+                BindExpression(argument);
+            }
+
+            Report("SQL206", $"Unknown table function '{function.Name.Name}'.", function.Name.Span);
+            return Array.Empty<BoundColumn>();
+        }
+
+        if (name == "unnest")
+        {
+            if (function.Arguments.Count == 0)
+            {
+                Report("SQL212", "UNNEST requires at least one array argument.", function.Span);
+                return Array.Empty<BoundColumn>();
+            }
+
+            var columns = new List<BoundColumn>();
+            for (var index = 0; index < function.Arguments.Count; index++)
+            {
+                var argument = BindExpression(function.Arguments[index]);
+                if (argument.IsKnown && !argument.IsArray)
+                {
+                    Report("SQL207", "UNNEST requires array arguments.", function.Arguments[index].Span);
+                    continue;
+                }
+
+                var columnName = function.Arguments.Count == 1 && reference.Alias != null &&
+                    reference.ColumnAliases.Count == 0
+                    ? reference.Alias.Name
+                    : "unnest";
+                var elementType = argument.IsKnown
+                    ? argument.Type.ElementType
+                    : new SqlTypeShape(SqlValueKind.Unknown);
+                columns.Add(new BoundColumn(
+                    columnName,
+                    new TypeInfo(elementType, true, false, argument.ParameterName),
+                    function.Arguments[index].Span));
+            }
+
+            return columns;
+        }
+
+        if (name == "generate_subscripts")
+        {
+            if (function.Arguments.Count < 2 || function.Arguments.Count > 3)
+            {
+                foreach (var argument in function.Arguments) BindExpression(argument);
+                Report("SQL212", "GENERATE_SUBSCRIPTS expects two or three arguments.", function.Span);
+                return Array.Empty<BoundColumn>();
+            }
+
+            var array = BindExpression(function.Arguments[0]);
+            if (array.IsKnown && !array.IsArray)
+            {
+                Report("SQL207", "GENERATE_SUBSCRIPTS requires an array first argument.", function.Arguments[0].Span);
+            }
+
+            BindIntegerContext(function.Arguments[1], "GENERATE_SUBSCRIPTS dimension");
+            if (function.Arguments.Count == 3)
+            {
+                var reverse = BindExpression(function.Arguments[2], SqlValueKind.Bool);
+                EnsureKind(reverse, SqlValueKind.Bool, function.Arguments[2].Span, "GENERATE_SUBSCRIPTS reverse must be boolean.");
+            }
+
+            var columnName = reference.Alias != null && reference.ColumnAliases.Count == 0
+                ? reference.Alias.Name
+                : "generate_subscripts";
+            return new[]
+            {
+                new BoundColumn(columnName, new TypeInfo(SqlValueKind.Int32, false), function.Span),
+            };
+        }
+
+        foreach (var argument in function.Arguments)
+        {
+            BindExpression(argument);
+        }
+
+        Report("SQL206", $"Unknown table function '{function.Name.Name}'.", function.Name.Span);
+        return Array.Empty<BoundColumn>();
     }
 
     private void ApplyTableColumnAliases(
@@ -1573,8 +1740,7 @@ internal sealed class Binder
 
         foreach (var column in scopeTable.Table.Columns)
         {
-            SqlValueKind kind;
-            if (!_types.TryMap(column.SqlType, out kind))
+            if (!_types.TryMapType(column.SqlType, out var type))
             {
                 Report("SQL205", $"Unsupported SQL type '{column.SqlType}' on column '{column.Name}'.", span);
                 continue;
@@ -1582,12 +1748,15 @@ internal sealed class Binder
 
             result.Add(new BoundColumn(
                 column.Name,
-                new TypeInfo(kind, column.IsNullable || scopeTable.ForcedNullable),
+                new TypeInfo(type, column.IsNullable || scopeTable.ForcedNullable),
                 span));
         }
     }
 
-    private TypeInfo BindExpression(Expression expression, SqlValueKind expected = SqlValueKind.Unknown)
+    private TypeInfo BindExpression(Expression expression, SqlValueKind expected = SqlValueKind.Unknown) =>
+        BindExpression(expression, new SqlTypeShape(expected));
+
+    private TypeInfo BindExpression(Expression expression, SqlTypeShape expected)
     {
         var parameter = expression as ParameterExpression;
         if (parameter != null)
@@ -1603,6 +1772,15 @@ internal sealed class Binder
 
         var literal = expression as LiteralExpression;
         if (literal != null) return BindLiteral(literal);
+
+        var array = expression as ArrayExpression;
+        if (array != null) return BindArray(array, expected);
+
+        var subscript = expression as ArraySubscriptExpression;
+        if (subscript != null) return BindArraySubscript(subscript);
+
+        var quantified = expression as QuantifiedComparisonExpression;
+        if (quantified != null) return BindQuantifiedComparison(quantified);
 
         var column = expression as ColumnExpression;
         if (column != null) return BindColumn(column);
@@ -1703,7 +1881,96 @@ internal sealed class Binder
         }
     }
 
-    private TypeInfo BindParameter(ParameterExpression expression, SqlValueKind expected)
+    private TypeInfo BindArray(ArrayExpression expression, SqlTypeShape expected)
+    {
+        var expectedElement = expected.IsArray
+            ? expected.ElementType
+            : new SqlTypeShape(SqlValueKind.Unknown);
+        var elements = new List<TypeInfo>();
+        var elementType = expectedElement;
+        foreach (var element in expression.Elements)
+        {
+            var type = BindExpression(element, expectedElement);
+            elements.Add(type);
+            if (type.IsArray)
+            {
+                Report("SQL207", "Nested ARRAY constructors are not supported.", element.Span);
+                return ErrorType();
+            }
+
+            if (!_types.TryUnify(elementType, type.Type, out elementType))
+            {
+                Report("SQL207", "ARRAY elements must have compatible types.", expression.Span);
+                return ErrorType();
+            }
+        }
+
+        if (!elementType.IsKnown)
+        {
+            return new TypeInfo(new SqlTypeShape(SqlValueKind.Unknown, true), false);
+        }
+
+        for (var index = 0; index < expression.Elements.Count; index++)
+        {
+            ApplyExpected(expression.Elements[index], elementType);
+            elements[index] = Refresh(elements[index]);
+        }
+
+        return new TypeInfo(elementType.ToArray(), false);
+    }
+
+    private TypeInfo BindArraySubscript(ArraySubscriptExpression expression)
+    {
+        var array = BindExpression(expression.Array);
+        var index = BindExpression(expression.Index, SqlValueKind.Int32);
+        if (index.IsArray || index.IsKnown && !_types.IsInteger(index.Kind))
+        {
+            Report("SQL207", "An array subscript must be an integer.", expression.Index.Span);
+            return ErrorType();
+        }
+
+        if (array.IsKnown && !array.IsArray)
+        {
+            Report("SQL207", "Array subscripting requires an array value.", expression.Array.Span);
+            return ErrorType();
+        }
+
+        return array.IsKnown
+            ? new TypeInfo(array.Type.ElementType, true)
+            : new TypeInfo(SqlValueKind.Unknown, true, false, array.ParameterName);
+    }
+
+    private TypeInfo BindQuantifiedComparison(QuantifiedComparisonExpression expression)
+    {
+        var left = BindExpression(expression.Left);
+        var expectedArray = left.IsKnown
+            ? left.Type.ToArray()
+            : new SqlTypeShape(SqlValueKind.Unknown, true);
+        var array = BindExpression(expression.Array, expectedArray);
+        if (array.IsKnown && !array.IsArray)
+        {
+            Report("SQL207", $"{expression.Quantifier.ToString().ToUpperInvariant()} requires an array expression.", expression.Array.Span);
+            return ErrorType();
+        }
+
+        if (array.IsKnown)
+        {
+            ApplyExpected(expression.Left, array.Type.ElementType);
+            left = Refresh(left);
+        }
+
+        if (left.IsKnown && array.IsKnown && !AreCompatible(left, new TypeInfo(array.Type.ElementType, array.Nullable)))
+        {
+            Report("SQL207", "The quantified comparison uses incompatible element types.", expression.Span);
+            return ErrorType();
+        }
+
+        // PostgreSQL arrays can contain null elements even when the array itself is not null.
+        // A strict ANY/ALL comparison can therefore produce null when no decisive match exists.
+        return new TypeInfo(SqlValueKind.Bool, true);
+    }
+
+    private TypeInfo BindParameter(ParameterExpression expression, SqlTypeShape expected)
     {
         ParameterState state;
         if (!_parameters.TryGetValue(expression.Name, out state!))
@@ -1713,29 +1980,29 @@ internal sealed class Binder
             _parameterOrder.Add(state);
         }
 
-        if (expected != SqlValueKind.Unknown && expected != SqlValueKind.Error)
+        if (expected.Kind != SqlValueKind.Unknown && expected.Kind != SqlValueKind.Error)
         {
             Constrain(state, expected, expression.Span);
         }
 
-        return state.Kind == SqlValueKind.Unknown
+        return state.Type.Kind == SqlValueKind.Unknown
             ? new TypeInfo(SqlValueKind.Unknown, false, false, state.Name)
-            : new TypeInfo(state.Kind, false, false, state.Name);
+            : new TypeInfo(state.Type, false, false, state.Name);
     }
 
-    private void Constrain(ParameterState state, SqlValueKind kind, SourceSpan span)
+    private void Constrain(ParameterState state, SqlTypeShape type, SourceSpan span)
     {
-        if (state.Kind == SqlValueKind.Unknown)
+        if (state.Type.Kind == SqlValueKind.Unknown)
         {
-            state.Kind = kind;
+            state.Type = type;
             return;
         }
 
-        if (state.Kind != kind)
+        if (!state.Type.Equals(type))
         {
             Report(
                 "SQL210",
-                $"Parameter '{state.Name}' is used as both {_types.ToClrName(state.Kind, false)} and {_types.ToClrName(kind, false)}.",
+                $"Parameter '{state.Name}' is used as both {_types.ToClrName(state.Type, false)} and {_types.ToClrName(type, false)}.",
                 span);
         }
     }
@@ -1856,14 +2123,13 @@ internal sealed class Binder
 
     private TypeInfo ColumnType(Column column, bool forcedNullable, SourceSpan span)
     {
-        SqlValueKind kind;
-        if (!_types.TryMap(column.SqlType, out kind))
+        if (!_types.TryMapType(column.SqlType, out var type))
         {
             Report("SQL205", $"Unsupported SQL type '{column.SqlType}' on column '{column.Name}'.", span);
             return ErrorType();
         }
 
-        return new TypeInfo(kind, column.IsNullable || forcedNullable);
+        return new TypeInfo(type, column.IsNullable || forcedNullable);
     }
 
     private TypeInfo BindUnary(UnaryExpression expression)
@@ -1876,7 +2142,7 @@ internal sealed class Binder
         }
 
         var numeric = BindExpression(expression.Operand);
-        if (numeric.IsKnown && !_types.IsNumeric(numeric.Kind))
+        if (numeric.IsKnown && (numeric.IsArray || !_types.IsNumeric(numeric.Kind)))
         {
             Report("SQL207", $"Unary '{expression.Operator}' requires a numeric operand.", expression.Span);
             return ErrorType();
@@ -1960,11 +2226,23 @@ internal sealed class Binder
     private TypeInfo BindContainment(BinaryExpression expression)
     {
         var left = BindExpression(expression.Left);
-        var right = BindExpression(expression.Right, left.IsKnown ? left.Kind : SqlValueKind.Unknown);
+        var right = BindExpression(
+            expression.Right,
+            left.IsKnown ? left.Type : new SqlTypeShape(SqlValueKind.Unknown));
         InferPair(expression.Left, ref left, expression.Right, ref right);
         if (!AreCompatible(left, right))
         {
             Report("SQL207", $"Operator '{expression.Operator}' requires compatible operands.", expression.Span);
+            return ErrorType();
+        }
+
+        var arrays = left.IsArray || right.IsArray;
+        var json = !arrays && expression.Operator != "&&" &&
+            (left.Kind == SqlValueKind.Json || left.Kind == SqlValueKind.JsonBinary || !left.IsKnown) &&
+            (right.Kind == SqlValueKind.Json || right.Kind == SqlValueKind.JsonBinary || !right.IsKnown);
+        if (!arrays && !json)
+        {
+            Report("SQL207", $"Operator '{expression.Operator}' requires array operands or compatible JSON operands.", expression.Span);
             return ErrorType();
         }
 
@@ -1975,14 +2253,15 @@ internal sealed class Binder
     {
         var left = BindExpression(expression.Left);
         var right = BindExpression(expression.Right);
-        if (left.IsKnown && left.Kind != SqlValueKind.Json && left.Kind != SqlValueKind.JsonBinary)
+        if (left.IsKnown && (left.IsArray || left.Kind != SqlValueKind.Json && left.Kind != SqlValueKind.JsonBinary))
         {
             Report("SQL207", $"Operator '{expression.Operator}' requires a json or jsonb left operand.", expression.Left.Span);
             return ErrorType();
         }
 
-        if (right.IsKnown && right.Kind != SqlValueKind.Int16 && right.Kind != SqlValueKind.Int32 &&
-            right.Kind != SqlValueKind.Int64 && right.Kind != SqlValueKind.String)
+        if (right.IsKnown && (right.IsArray ||
+            right.Kind != SqlValueKind.Int16 && right.Kind != SqlValueKind.Int32 &&
+            right.Kind != SqlValueKind.Int64 && right.Kind != SqlValueKind.String))
         {
             Report("SQL207", $"Operator '{expression.Operator}' requires a text or integer path operand.", expression.Right.Span);
             return ErrorType();
@@ -2006,8 +2285,25 @@ internal sealed class Binder
 
     private TypeInfo BindConcat(BinaryExpression expression)
     {
-        var left = BindExpression(expression.Left, SqlValueKind.String);
-        var right = BindExpression(expression.Right, SqlValueKind.String);
+        var left = BindExpression(expression.Left);
+        var right = BindExpression(
+            expression.Right,
+            left.IsKnown ? left.Type : new SqlTypeShape(SqlValueKind.Unknown));
+        InferPair(expression.Left, ref left, expression.Right, ref right);
+        if (left.IsArray || right.IsArray)
+        {
+            if (!AreCompatible(left, right) || left.IsKnown && !left.IsArray || right.IsKnown && !right.IsArray)
+            {
+                Report("SQL207", "Array concatenation requires compatible array operands.", expression.Span);
+                return ErrorType();
+            }
+
+            var type = left.IsKnown ? left.Type : right.Type;
+            return new TypeInfo(type, IsNullable(left) || IsNullable(right));
+        }
+
+        left = BindExpression(expression.Left, SqlValueKind.String);
+        right = BindExpression(expression.Right, SqlValueKind.String);
         var valid = EnsureKind(left, SqlValueKind.String, expression.Left.Span, "String concatenation requires string operands.");
         valid &= EnsureKind(right, SqlValueKind.String, expression.Right.Span, "String concatenation requires string operands.");
         return valid
@@ -2021,14 +2317,20 @@ internal sealed class Binder
         var right = BindExpression(expression.Right);
         InferPair(expression.Left, ref left, expression.Right, ref right);
         if (left.IsError || right.IsError) return ErrorType();
+        if (left.IsArray || right.IsArray)
+        {
+            Report("SQL207", $"Operator '{expression.Operator}' does not accept array operands.", expression.Span);
+            return ErrorType();
+        }
+
         var temporal = BindTemporalArithmetic(expression, left, right);
         if (temporal.HasValue)
         {
             return temporal.Value;
         }
 
-        if ((left.IsKnown && !_types.IsNumeric(left.Kind)) ||
-            (right.IsKnown && !_types.IsNumeric(right.Kind)))
+        if ((left.IsKnown && (left.IsArray || !_types.IsNumeric(left.Kind))) ||
+            (right.IsKnown && (right.IsArray || !_types.IsNumeric(right.Kind))))
         {
             Report("SQL207", $"Operator '{expression.Operator}' requires numeric operands.", expression.Span);
             return ErrorType();
@@ -2160,11 +2462,13 @@ internal sealed class Binder
         var values = new List<TypeInfo>();
         foreach (var value in expression.Values)
         {
-            values.Add(BindExpression(value, operand.IsKnown ? operand.Kind : SqlValueKind.Unknown));
+            values.Add(BindExpression(
+                value,
+                operand.IsKnown ? operand.Type : new SqlTypeShape(SqlValueKind.Unknown)));
         }
 
-        var common = operand.IsKnown ? operand.Kind : FirstKnown(values);
-        if (common != SqlValueKind.Unknown)
+        var common = operand.IsKnown ? operand.Type : FirstKnown(values);
+        if (common.Kind != SqlValueKind.Unknown)
         {
             ApplyExpected(expression.Operand, common);
             operand = Refresh(operand);
@@ -2199,10 +2503,14 @@ internal sealed class Binder
     private TypeInfo BindBetween(BetweenExpression expression)
     {
         var operand = BindExpression(expression.Operand);
-        var lower = BindExpression(expression.Lower, operand.IsKnown ? operand.Kind : SqlValueKind.Unknown);
-        var upper = BindExpression(expression.Upper, operand.IsKnown ? operand.Kind : SqlValueKind.Unknown);
-        var common = operand.IsKnown ? operand.Kind : (lower.IsKnown ? lower.Kind : upper.Kind);
-        if (common != SqlValueKind.Unknown)
+        var lower = BindExpression(
+            expression.Lower,
+            operand.IsKnown ? operand.Type : new SqlTypeShape(SqlValueKind.Unknown));
+        var upper = BindExpression(
+            expression.Upper,
+            operand.IsKnown ? operand.Type : new SqlTypeShape(SqlValueKind.Unknown));
+        var common = operand.IsKnown ? operand.Type : (lower.IsKnown ? lower.Type : upper.Type);
+        if (common.Kind != SqlValueKind.Unknown)
         {
             ApplyExpected(expression.Operand, common);
             ApplyExpected(expression.Lower, common);
@@ -2223,16 +2531,15 @@ internal sealed class Binder
 
     private TypeInfo BindCast(CastExpression expression)
     {
-        SqlValueKind kind;
-        if (!_types.TryMap(expression.SqlType, out kind))
+        if (!_types.TryMapType(expression.SqlType, out var type))
         {
             BindExpression(expression.Operand);
             Report("SQL205", $"Unsupported SQL type '{expression.SqlType}'.", expression.Span);
             return ErrorType();
         }
 
-        var operand = BindExpression(expression.Operand, kind);
-        return new TypeInfo(kind, IsNullable(operand));
+        var operand = BindExpression(expression.Operand, type);
+        return new TypeInfo(type, IsNullable(operand));
     }
 
     private TypeInfo BindCase(CaseExpression expression)
@@ -2249,7 +2556,9 @@ internal sealed class Binder
             var operand = BindExpression(expression.Operand);
             foreach (var clause in expression.Clauses)
             {
-                var condition = BindExpression(clause.Condition, operand.IsKnown ? operand.Kind : SqlValueKind.Unknown);
+                var condition = BindExpression(
+                    clause.Condition,
+                    operand.IsKnown ? operand.Type : new SqlTypeShape(SqlValueKind.Unknown));
                 InferPair(expression.Operand, ref operand, clause.Condition, ref condition);
                 if (!AreCompatible(operand, condition))
                 {
@@ -2265,12 +2574,12 @@ internal sealed class Binder
         }
 
         var resultTypes = resultExpressions.Select(item => BindExpression(item)).ToList();
-        var kind = UnifyExpressions(resultExpressions, resultTypes, expression.Span, "CASE result types are incompatible.");
+        var type = UnifyExpressions(resultExpressions, resultTypes, expression.Span, "CASE result types are incompatible.");
         var nullable = expression.ElseExpression == null || resultTypes.Any(IsNullable);
         var allNull = resultTypes.Count != 0 && resultTypes.All(item => item.IsNullLiteral || item.Kind == SqlValueKind.Unknown);
-        return kind == SqlValueKind.Error
+        return type.Kind == SqlValueKind.Error
             ? ErrorType()
-            : new TypeInfo(kind, nullable, allNull);
+            : new TypeInfo(type, nullable, allNull);
     }
 
     private TypeInfo BindFunction(FunctionExpression expression)
@@ -2382,7 +2691,7 @@ internal sealed class Binder
 
         if (expression.Arguments.Count > 2)
         {
-            var fallback = BindExpression(expression.Arguments[2], value.Kind);
+            var fallback = BindExpression(expression.Arguments[2], value.Type);
             if (!AreCompatible(value, fallback))
             {
                 Report("SQL207", "Window-function value and default arguments are incompatible.", expression.Span);
@@ -2404,10 +2713,10 @@ internal sealed class Binder
         }
 
         var types = expression.Arguments.Select(argument => BindExpression(argument)).ToList();
-        var kind = UnifyExpressions(expression.Arguments.ToList(), types, expression.Span, "Function arguments are incompatible.");
-        return kind == SqlValueKind.Error
+        var type = UnifyExpressions(expression.Arguments.ToList(), types, expression.Span, "Function arguments are incompatible.");
+        return type.Kind == SqlValueKind.Error
             ? ErrorType()
-            : new TypeInfo(kind, types.Any(IsNullable));
+            : new TypeInfo(type, types.Any(IsNullable));
     }
 
     private TypeInfo BindNumericFunction(FunctionExpression expression)
@@ -2420,7 +2729,7 @@ internal sealed class Binder
         }
 
         var value = BindExpression(expression.Arguments[0]);
-        if (value.IsKnown && !_types.IsNumeric(value.Kind))
+        if (value.IsKnown && (value.IsArray || !_types.IsNumeric(value.Kind)))
         {
             Report("SQL207", $"{expression.Name.Name.ToUpperInvariant()} requires a numeric argument.", expression.Arguments[0].Span);
             return ErrorType();
@@ -2439,8 +2748,8 @@ internal sealed class Binder
         if (!RequireArgumentCount(expression, 2)) return ErrorType();
         var left = BindExpression(expression.Arguments[0]);
         var right = BindExpression(expression.Arguments[1]);
-        if ((left.IsKnown && !_types.IsNumeric(left.Kind)) ||
-            (right.IsKnown && !_types.IsNumeric(right.Kind)))
+        if ((left.IsKnown && (left.IsArray || !_types.IsNumeric(left.Kind))) ||
+            (right.IsKnown && (right.IsArray || !_types.IsNumeric(right.Kind))))
         {
             Report("SQL207", "POWER requires numeric arguments.", expression.Span);
             return ErrorType();
@@ -2514,7 +2823,8 @@ internal sealed class Binder
         var field = BindExpression(expression.Arguments[0], SqlValueKind.String);
         var value = BindExpression(expression.Arguments[1]);
         var valid = EnsureKind(field, SqlValueKind.String, expression.Arguments[0].Span, "DATE_TRUNC requires a text field name.");
-        valid &= IsTimestamp(value.Kind) || value.Kind == SqlValueKind.Interval || !value.IsKnown;
+        valid &= !value.IsArray &&
+            (IsTimestamp(value.Kind) || value.Kind == SqlValueKind.Interval || !value.IsKnown);
         if (!valid)
         {
             Report("SQL207", "DATE_TRUNC requires a timestamp or interval value.", expression.Arguments[1].Span);
@@ -2530,8 +2840,9 @@ internal sealed class Binder
         var field = BindExpression(expression.Arguments[0], SqlValueKind.String);
         var value = BindExpression(expression.Arguments[1]);
         var valid = EnsureKind(field, SqlValueKind.String, expression.Arguments[0].Span, "Date-part extraction requires a text field name.");
-        valid &= value.Kind == SqlValueKind.DateOnly || value.Kind == SqlValueKind.TimeOnly ||
-                 IsTimestamp(value.Kind) || value.Kind == SqlValueKind.Interval || !value.IsKnown;
+        valid &= !value.IsArray &&
+            (value.Kind == SqlValueKind.DateOnly || value.Kind == SqlValueKind.TimeOnly ||
+             IsTimestamp(value.Kind) || value.Kind == SqlValueKind.Interval || !value.IsKnown);
         if (!valid)
         {
             Report("SQL207", "Date-part extraction requires a date, time, timestamp, or interval value.", expression.Arguments[1].Span);
@@ -2546,6 +2857,12 @@ internal sealed class Binder
         if (!RequireArgumentCount(expression, 2)) return ErrorType();
         var value = BindExpression(expression.Arguments[0]);
         var format = BindExpression(expression.Arguments[1], SqlValueKind.String);
+        if (value.IsArray)
+        {
+            Report("SQL207", "TO_CHAR does not accept an array value.", expression.Arguments[0].Span);
+            return ErrorType();
+        }
+
         return EnsureKind(format, SqlValueKind.String, expression.Arguments[1].Span, "TO_CHAR requires a text format.")
             ? new TypeInfo(SqlValueKind.String, IsNullable(value) || IsNullable(format))
             : ErrorType();
@@ -2593,16 +2910,18 @@ internal sealed class Binder
         var argument = BindExpression(expression.Arguments[0]);
         if (argument.IsError) return argument;
         if ((aggregate == AggregateKind.Sum || aggregate == AggregateKind.Avg) &&
-            argument.IsKnown && !_types.IsNumeric(argument.Kind))
+            argument.IsKnown && (argument.IsArray || !_types.IsNumeric(argument.Kind)))
         {
             Report("SQL207", $"{expression.Name.Name.ToUpperInvariant()} requires a numeric argument.", expression.Arguments[0].Span);
             return ErrorType();
         }
 
-        var kind = _types.AggregateResult(expression.Name.Name, argument.Kind);
-
         var nullable = _hasGroupBy ? IsNullable(argument) : true;
-        return new TypeInfo(kind, nullable, argument.IsNullLiteral, argument.ParameterName);
+        var resultType = argument.IsArray &&
+            (aggregate == AggregateKind.Min || aggregate == AggregateKind.Max)
+            ? argument.Type
+            : new SqlTypeShape(_types.AggregateResult(expression.Name.Name, argument.Kind));
+        return new TypeInfo(resultType, nullable, argument.IsNullLiteral, argument.ParameterName);
     }
 
     private TypeInfo BindStringFunction(FunctionExpression expression, SqlValueKind resultKind)
@@ -2621,7 +2940,7 @@ internal sealed class Binder
     {
         if (!RequireArgumentCount(expression, 1)) return ErrorType();
         var argument = BindExpression(expression.Arguments[0]);
-        if (argument.IsKnown && !_types.IsNumeric(argument.Kind))
+        if (argument.IsKnown && (argument.IsArray || !_types.IsNumeric(argument.Kind)))
         {
             Report("SQL207", "ABS requires a numeric argument.", expression.Arguments[0].Span);
             return ErrorType();
@@ -2640,12 +2959,12 @@ internal sealed class Binder
 
         var expressions = expression.Arguments.ToList();
         var types = expressions.Select(item => BindExpression(item)).ToList();
-        var kind = UnifyExpressions(expressions, types, expression.Span, "COALESCE argument types are incompatible.");
+        var type = UnifyExpressions(expressions, types, expression.Span, "COALESCE argument types are incompatible.");
         var nullable = types.All(IsNullable);
         var allNull = types.All(item => item.IsNullLiteral || item.Kind == SqlValueKind.Unknown);
-        return kind == SqlValueKind.Error
+        return type.Kind == SqlValueKind.Error
             ? ErrorType()
-            : new TypeInfo(kind, nullable, allNull);
+            : new TypeInfo(type, nullable, allNull);
     }
 
     private TypeInfo BindNullIf(FunctionExpression expression)
@@ -2660,58 +2979,60 @@ internal sealed class Binder
             return ErrorType();
         }
 
-        var kind = first.IsKnown ? first.Kind : second.Kind;
-        return new TypeInfo(kind, true, first.IsNullLiteral && !second.IsKnown, first.ParameterName ?? second.ParameterName);
+        var type = first.IsKnown ? first.Type : second.Type;
+        return new TypeInfo(type, true, first.IsNullLiteral && !second.IsKnown, first.ParameterName ?? second.ParameterName);
     }
 
-    private SqlValueKind UnifyExpressions(
+    private SqlTypeShape UnifyExpressions(
         IReadOnlyList<Expression> expressions,
         IList<TypeInfo> types,
         SourceSpan span,
         string message)
     {
-        var kind = SqlValueKind.Unknown;
-        foreach (var type in types)
+        var commonType = new SqlTypeShape(SqlValueKind.Unknown);
+        foreach (var candidate in types)
         {
-            if (!type.IsKnown) continue;
-            SqlValueKind unified;
-            if (!_types.TryUnify(kind, type.Kind, out unified))
+            if (!candidate.IsKnown) continue;
+            if (!_types.TryUnify(commonType, candidate.Type, out var unified))
             {
                 Report("SQL207", message, span);
-                return SqlValueKind.Error;
+                return new SqlTypeShape(SqlValueKind.Error);
             }
 
-            kind = unified;
+            commonType = unified;
         }
 
-        if (kind != SqlValueKind.Unknown)
+        if (commonType.Kind != SqlValueKind.Unknown)
         {
             for (var index = 0; index < expressions.Count; index++)
             {
-                ApplyExpected(expressions[index], kind);
+                ApplyExpected(expressions[index], commonType);
                 types[index] = Refresh(types[index]);
             }
         }
 
-        return kind;
+        return commonType;
     }
 
     private void InferPair(Expression leftExpression, ref TypeInfo left, Expression rightExpression, ref TypeInfo right)
     {
         if (left.IsKnown && rightExpression is ParameterExpression)
         {
-            ApplyExpected(rightExpression, left.Kind);
+            ApplyExpected(rightExpression, left.Type);
             right = Refresh(right);
         }
 
         if (right.IsKnown && leftExpression is ParameterExpression)
         {
-            ApplyExpected(leftExpression, right.Kind);
+            ApplyExpected(leftExpression, right.Type);
             left = Refresh(left);
         }
     }
 
-    private void ApplyExpected(Expression expression, SqlValueKind kind)
+    private void ApplyExpected(Expression expression, SqlValueKind kind) =>
+        ApplyExpected(expression, new SqlTypeShape(kind));
+
+    private void ApplyExpected(Expression expression, SqlTypeShape type)
     {
         var parameter = expression as ParameterExpression;
         if (parameter == null)
@@ -2722,7 +3043,7 @@ internal sealed class Binder
         ParameterState state;
         if (_parameters.TryGetValue(parameter.Name, out state!))
         {
-            Constrain(state, kind, parameter.Span);
+            Constrain(state, type, parameter.Span);
         }
     }
 
@@ -2734,8 +3055,8 @@ internal sealed class Binder
         }
 
         ParameterState state;
-        return _parameters.TryGetValue(type.ParameterName, out state!) && state.Kind != SqlValueKind.Unknown
-            ? new TypeInfo(state.Kind, type.Nullable, type.IsNullLiteral, type.ParameterName)
+        return _parameters.TryGetValue(type.ParameterName, out state!) && state.Type.Kind != SqlValueKind.Unknown
+            ? new TypeInfo(state.Type, type.Nullable, type.IsNullLiteral, type.ParameterName)
             : type;
     }
 
@@ -2748,7 +3069,7 @@ internal sealed class Binder
     private void BindIntegerContext(Expression expression, string context)
     {
         var type = BindExpression(expression, SqlValueKind.Int64);
-        if (type.IsKnown && !_types.IsInteger(type.Kind))
+        if (type.IsKnown && (type.IsArray || !_types.IsInteger(type.Kind)))
         {
             Report("SQL207", $"{context} requires an integer expression.", expression.Span);
         }
@@ -2757,7 +3078,7 @@ internal sealed class Binder
     private bool EnsureKind(TypeInfo type, SqlValueKind expected, SourceSpan span, string message, string code = "SQL207")
     {
         if (type.IsError) return false;
-        if (type.IsKnown && type.Kind != expected)
+        if (type.IsKnown && (type.IsArray || type.Kind != expected))
         {
             Report(code, message, span);
             return false;
@@ -2770,20 +3091,19 @@ internal sealed class Binder
     {
         if (left.IsError || right.IsError) return true;
         if (!left.IsKnown || !right.IsKnown) return true;
-        SqlValueKind ignored;
-        return _types.TryUnify(left.Kind, right.Kind, out ignored);
+        return _types.TryUnify(left.Type, right.Type, out _);
     }
 
     private static bool IsNullable(TypeInfo type) => type.Nullable || type.IsNullLiteral;
 
-    private static SqlValueKind FirstKnown(IEnumerable<TypeInfo> types)
+    private static SqlTypeShape FirstKnown(IEnumerable<TypeInfo> types)
     {
         foreach (var type in types)
         {
-            if (type.IsKnown) return type.Kind;
+            if (type.IsKnown) return type.Type;
         }
 
-        return SqlValueKind.Unknown;
+        return new SqlTypeShape(SqlValueKind.Unknown);
     }
 
     private bool RequireArgumentCount(FunctionExpression expression, int count)
@@ -2884,7 +3204,7 @@ internal sealed class Binder
         var result = new List<QueryParameter>();
         foreach (var parameter in _parameterOrder)
         {
-            if (parameter.Kind == SqlValueKind.Unknown)
+            if (parameter.Type.Kind == SqlValueKind.Unknown)
             {
                 Report("SQL209", $"The type of parameter '{parameter.Name}' cannot be inferred.", parameter.FirstSpan);
                 continue;
@@ -2892,8 +3212,8 @@ internal sealed class Binder
 
             result.Add(new QueryParameter(
                 parameter.Name,
-                _types.ToClrName(parameter.Kind, false),
-                _types.ToDatabaseTypeName(parameter.Kind)));
+                _types.ToClrName(parameter.Type, false),
+                _types.ToDatabaseTypeName(parameter.Type)));
         }
 
         return result;
@@ -2920,7 +3240,7 @@ internal sealed class Binder
                 continue;
             }
 
-            result.Add(new ResultColumn(column.Name, _types.ToClrName(type.Kind, type.Nullable)));
+            result.Add(new ResultColumn(column.Name, _types.ToClrName(type.Type, type.Nullable)));
         }
 
         return result;
@@ -2961,7 +3281,7 @@ internal sealed class Binder
 
         internal string Name { get; }
         internal SourceSpan FirstSpan { get; }
-        internal SqlValueKind Kind { get; set; }
+        internal SqlTypeShape Type { get; set; }
     }
 
     private sealed class BoundColumn

@@ -861,9 +861,11 @@ public static class UserReader
 
 この `rows` の `record` 型には `Id` と `DisplayName` があります。`rows[0].Email` のように結果にないプロパティを参照すると、通常の C# コンパイルエラーになります。SQL の文法違反、スキーマにない列、型を判断できないパラメーターもコンパイルエラーです。`WithParameter` にコンパイル時定数で指定した名前と C# 型も、SQL の解析結果と一致するか検査されます。これらの検査は、内容がコンパイル時に決まる対応済みの文が対象です。
 
-対応する `SELECT` の範囲には、CTE、再帰 CTE、`VALUES`、派生テーブル、相関サブクエリ、`DISTINCT ON`、集合演算、結合、絞り込み、グループ化、並び順、`LIMIT` / `OFFSET` / `FETCH`、行ロック、`CASE`、型変換、日付と interval のリテラル、インラインまたは名前付きのウィンドウ、集約関数の `FILTER`、主要なスカラー関数と集約関数が含まれます。PostgreSQL 固有の演算子では、`ILIKE`、正規表現、`IS DISTINCT FROM`、JSON の値取得、包含、重複、剰余、べき乗を解析します。詳しくは [PostgreSQL SELECT の対応範囲](docs/design/poc-sql-type-inference.md#supported-select-syntax) を参照してください。
+対応する `SELECT` の範囲には、CTE、再帰 CTE、`VALUES`、派生テーブル、相関サブクエリ、`DISTINCT ON`、集合演算、結合、絞り込み、グループ化、並び順、`LIMIT` / `OFFSET` / `FETCH`、行ロック、`CASE`、型変換、日付と interval のリテラル、`ARRAY[...]` コンストラクターと添字アクセス、`ANY` / `ALL`、`unnest`、`generate_subscripts`、インラインまたは名前付きのウィンドウ、集約関数の `FILTER`、主要なスカラー関数と集約関数が含まれます。PostgreSQL 固有の演算子では、`ILIKE`、正規表現、`IS DISTINCT FROM`、JSON の値取得、配列と JSON の包含、配列の重複、剰余、べき乗を解析します。詳しくは [PostgreSQL SELECT の対応範囲](docs/design/poc-sql-type-inference.md#supported-select-syntax) を参照してください。
 
-`WithParameter` は SQL へ値を文字列連結せず、`DbParameter` として渡します。検査対象の文ではパラメーターの `DbType` を推論し、`json` / `jsonb` では PostgreSQL の型名もデータベースドライバーへ渡します。値を指定しなかったパラメーターは `ReadAsync` の前に検出されます。
+PostgreSQL の `integer[]`、`text[]`、`uuid[]` などの列は、それぞれ `int[]`、`string[]`、`Guid[]` を生成します。配列列が null を許可する場合は `string[]?` のような null 許容の配列型になります。配列パラメーターの要素にも同じ CLR 型の対応を使います。生成されたクエリは Npgsql のパラメーターに PostgreSQL の配列型名を設定し、対応する CLR 配列型で結果を読み取ります。
+
+`WithParameter` は SQL へ値を文字列連結せず、`DbParameter` として渡します。検査対象の文ではパラメーターの `DbType` を推論し、`json`、`jsonb`、配列では PostgreSQL の型名もデータベースドライバーへ渡します。値を指定しなかったパラメーターは `ReadAsync` の前に検出されます。
 
 ## ユーザー定義の結果型
 
@@ -897,7 +899,30 @@ var rows = await connection
     .ReadAsync();
 ```
 
-一つの値を変換する場合は `ValueHandler<THandler>` を付け、`THandler` に `IValueHandler<TValue>` を実装します。行全体を変換する場合は、結果型に `[ResultHandler<THandler>]` を付け、`IResultHandler<TResult>` を実装します。カスタムハンドラーを指定した部分の変換はハンドラーが受け持ちます。`Query` の SQL 自体は引き続きコンパイル時に検査されます。
+一つの値を変換する場合は `ValueHandler<THandler>` を付けます。`IValueHandler<TValue>` は `DbDataReader` から列を直接読み取ります。`IValueHandler<TSource, TValue>` は、SQL の列から推論した CLR 値を受け取り、結果メンバーの型へ変換します。
+
+二つの型を取るハンドラーは配列にも使えます。検査対象のクエリが `TSource[]` を返し、結果メンバーが `TValue[]` の場合、`IValueHandler<TSource, TValue>` を各要素へ適用します。`IValueHandler<TSource[], TArray>` を実装すると、配列全体をラッパーなどの配列ではない型へ変換できます。
+
+```csharp
+public readonly record struct CustomInt(int Value);
+public sealed record CustomIntArray(int[] Values);
+
+public sealed class CustomIntHandler : IValueHandler<int, CustomInt>
+{
+    public CustomInt Convert(int value) => new(value);
+}
+
+public sealed class CustomIntArrayHandler : IValueHandler<int[], CustomIntArray>
+{
+    public CustomIntArray Convert(int[] values) => new(values);
+}
+
+public sealed record ArrayView(
+    [ValueHandler<CustomIntHandler>] CustomInt[] Numbers,
+    [ResultColumn("numbers_copy"), ValueHandler<CustomIntArrayHandler>] CustomIntArray Wrapped);
+```
+
+変換元の CLR 型をビルド時に特定する必要があるため、二つの型を取るハンドラーは検査対象の `Query` で使います。`NoCheckQuery<TResult>` では、列を直接読む `IValueHandler<TValue>` を引き続き利用できます。行全体を変換する場合は、結果型に `[ResultHandler<THandler>]` を付け、`IResultHandler<TResult>` を実装します。カスタムハンドラーを指定した部分の変換はハンドラーが受け持ちます。`Query` の SQL 自体は引き続きコンパイル時に検査されます。
 
 ハンドラー型には、public な引数なしコンストラクターが必要です。インスタンスは一つだけ作成して再利用するため、ハンドラーには変更可能な状態を持たせず、複数スレッドから呼ばれても動作するようにしてください。結果マッピングでは、実行時のリフレクションによる型走査やメンバー呼び出しを行いません。
 
@@ -955,7 +980,7 @@ public static class UserWriter
 
 `ExecuteAsync` の戻り値は、データベースドライバーが返す更新件数です。パラメーターの値は `DbParameter` になり、`null` は `DBNull.Value` になります。固定 SQL もコンパイル時にパーサーで解析し、文法、対象のスキーマ、テーブル、列、式の型、パラメーターの型を、マイグレーション適用後のスキーマと照合します。`INSERT ... VALUES`、`DEFAULT VALUES`、`INSERT ... SELECT`、`ON CONFLICT`、`UPDATE ... FROM`、`DELETE ... USING`、`TRUNCATE`、`RETURNING`、データ変更文を囲む CTE が対応範囲です。権限、制約、トリガー、実データに依存する結果は、データベースへ接続しないため検査できません。スキーマを変更する SQL は `Query` ではなくマイグレーションに書いてください。
 
-コンパイル時の解析は PostgreSQL の全構文には対応していません。`MERGE`、`FROM` 内のテーブル関数、`GROUPING SETS`、`CUBE`、`ROLLUP`、配列コンストラクター、ユーザー定義関数の戻り値の型は未対応です。ウィンドウのフレーム句は受け付けますが、その内容までは検査しません。これらが必要な場合は `NoCheckQuery` を使います。
+コンパイル時の解析は PostgreSQL の全構文には対応していません。`MERGE`、`unnest` と `generate_subscripts` 以外の `FROM` 内のテーブル関数、`GROUPING SETS`、`CUBE`、`ROLLUP`、多次元配列の型とコンストラクター、配列のスライス、ユーザー定義関数の戻り値の型は未対応です。ウィンドウのフレーム句は受け付けますが、その内容までは検査しません。これらが必要な場合は `NoCheckQuery` を使います。
 
 SQL を直接書いて PostgreSQL の `json` / `jsonb` に文字列を渡す場合は、`WithConfiguredParameter("@document", json, DbType.String, static parameter => ((NpgsqlParameter)parameter).DataTypeName = "jsonb")` のように Npgsql のパラメーターを直接設定します。生成されたクエリでは、この設定も自動で行います。
 
@@ -1026,7 +1051,7 @@ dotnet publish -c Release -r linux-x64
 
 source generator が作る `CobaltumMigrationCatalog.All` は、実行時にアセンブリを走査しません。上の例のように、この一覧を `MigrationRunner` と `MigrationProjectHost` に渡してください。手書きの一覧は `MigrationInfo.Create<TMigration>(version, description)` で作れます。ユーザー定義のクエリ結果型とカスタムハンドラーも、実行時のリフレクションを使わず、生成コードから直接呼び出します。
 
-CobaltumORM は、PostgreSQL の `json` と `jsonb` に必要な Npgsql の設定を、生成コードから直接行います。それ以外の生成コードでは `DbType` を使います。PostgreSQL のプロジェクトには、インストールとマイグレーションプロジェクトの例にある Npgsql の参照が必要です。
+CobaltumORM は、PostgreSQL の `json`、`jsonb`、配列型に必要な Npgsql の設定を、生成コードから直接行います。それ以外の生成コードでは `DbType` を使います。PostgreSQL のプロジェクトには、インストールとマイグレーションプロジェクトの例にある Npgsql の参照が必要です。
 
 利用する ADO.NET ドライバーも、対象の publish 方式に対応している必要があります。ドライバーから trim または AOT の警告が出た場合は、publish 前に解消してください。
 

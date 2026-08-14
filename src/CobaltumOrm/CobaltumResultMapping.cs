@@ -11,6 +11,15 @@ public interface IValueHandler<TValue>
     TValue Read(DbDataReader reader, int ordinal);
 }
 
+/// <summary>Converts one database value to a result value.</summary>
+/// <typeparam name="TSource">The CLR type read from the database provider.</typeparam>
+/// <typeparam name="TValue">The result member type.</typeparam>
+public interface IValueHandler<in TSource, out TValue>
+{
+    /// <summary>Converts one value.</summary>
+    TValue Convert(TSource value);
+}
+
 /// <summary>Maps the current database row to a result value.</summary>
 public interface IResultHandler<TResult>
 {
@@ -67,4 +76,34 @@ public static class CobaltumHandlerCache<THandler>
 {
     /// <summary>Gets the handler instance used by generated mapping code.</summary>
     public static THandler Instance { get; } = new THandler();
+}
+
+/// <summary>Applies a value handler to each array element.</summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
+public static class CobaltumArrayHandler
+{
+    /// <summary>Converts every element in a non-null array.</summary>
+    public static TValue[] Convert<TSource, TValue, THandler>(TSource[] values, THandler handler)
+        where THandler : IValueHandler<TSource, TValue>
+    {
+        if (values is null)
+        {
+            throw new ArgumentNullException(nameof(values));
+        }
+
+        var result = new TValue[values.Length];
+        for (var index = 0; index < values.Length; index++)
+        {
+            result[index] = handler.Convert(values[index]);
+        }
+
+        return result;
+    }
+
+    /// <summary>Converts every element in a nullable array.</summary>
+    public static TValue[]? ConvertNullable<TSource, TValue, THandler>(TSource[]? values, THandler handler)
+        where THandler : IValueHandler<TSource, TValue>
+    {
+        return values is null ? null : Convert<TSource, TValue, THandler>(values, handler);
+    }
 }

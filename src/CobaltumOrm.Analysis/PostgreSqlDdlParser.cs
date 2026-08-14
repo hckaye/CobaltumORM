@@ -815,12 +815,17 @@ internal sealed class PostgreSqlDdlParser
             }
         }
 
-        if (Current.Kind == DdlTokenKind.Symbol && Current.Text == "[")
+        while (Current.Kind == DdlTokenKind.Symbol && Current.Text == "[")
         {
             builder.Append(Advance().Text);
             if (Current.Kind == DdlTokenKind.Symbol && Current.Text == "]")
             {
                 builder.Append(Advance().Text);
+            }
+            else
+            {
+                Report("DDL100", "Expected ']' in a PostgreSQL array type.", Current.Span);
+                break;
             }
         }
 

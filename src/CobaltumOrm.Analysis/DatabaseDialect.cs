@@ -249,34 +249,55 @@ public sealed class PostgreSqlTypeMapper : ISqlTypeMapper
 {
     public bool TryMap(string sqlType, out SqlValueKind kind)
     {
-        var normalized = Normalize(sqlType);
-        var baseType = RemoveTypeModifiers(normalized);
-        if (normalized.IndexOf('(') >= 0 && !AreTypeModifiersValid(normalized, baseType))
+        if (!TryMapType(sqlType, out var type) || type.IsArray)
         {
             kind = SqlValueKind.Error;
             return false;
         }
 
+        kind = type.Kind;
+        return true;
+    }
+
+    internal bool TryMapType(string sqlType, out SqlTypeShape type)
+    {
+        var normalized = Normalize(sqlType);
+        var arrayRank = RemoveArraySuffixes(ref normalized);
+        if (arrayRank > 1)
+        {
+            type = new SqlTypeShape(SqlValueKind.Error);
+            return false;
+        }
+
+        var isArray = arrayRank == 1;
+        var baseType = RemoveTypeModifiers(normalized);
+        if (normalized.IndexOf('(') >= 0 && !AreTypeModifiersValid(normalized, baseType))
+        {
+            type = new SqlTypeShape(SqlValueKind.Error);
+            return false;
+        }
+
+        SqlValueKind kind;
         switch (baseType)
         {
             case "boolean":
-            case "bool": kind = SqlValueKind.Bool; return true;
+            case "bool": kind = SqlValueKind.Bool; break;
             case "smallint":
             case "int2":
-            case "smallserial": kind = SqlValueKind.Int16; return true;
+            case "smallserial": kind = SqlValueKind.Int16; break;
             case "integer":
             case "int":
             case "int4":
-            case "serial": kind = SqlValueKind.Int32; return true;
+            case "serial": kind = SqlValueKind.Int32; break;
             case "bigint":
             case "int8":
-            case "bigserial": kind = SqlValueKind.Int64; return true;
-            case "real": kind = SqlValueKind.Float; return true;
-            case "float4": kind = SqlValueKind.Float; return true;
-            case "double precision": kind = SqlValueKind.Double; return true;
-            case "float8": kind = SqlValueKind.Double; return true;
+            case "bigserial": kind = SqlValueKind.Int64; break;
+            case "real": kind = SqlValueKind.Float; break;
+            case "float4": kind = SqlValueKind.Float; break;
+            case "double precision": kind = SqlValueKind.Double; break;
+            case "float8": kind = SqlValueKind.Double; break;
             case "numeric":
-            case "decimal": kind = SqlValueKind.Decimal; return true;
+            case "decimal": kind = SqlValueKind.Decimal; break;
             case "text":
             case "varchar":
             case "character varying":
@@ -285,23 +306,26 @@ public sealed class PostgreSqlTypeMapper : ISqlTypeMapper
             case "bpchar":
             case "name":
             case "xml":
-            case "jsonpath": kind = SqlValueKind.String; return true;
-            case "json": kind = SqlValueKind.Json; return true;
-            case "jsonb": kind = SqlValueKind.JsonBinary; return true;
-            case "uuid": kind = SqlValueKind.Guid; return true;
-            case "date": kind = SqlValueKind.DateOnly; return true;
+            case "jsonpath": kind = SqlValueKind.String; break;
+            case "json": kind = SqlValueKind.Json; break;
+            case "jsonb": kind = SqlValueKind.JsonBinary; break;
+            case "uuid": kind = SqlValueKind.Guid; break;
+            case "date": kind = SqlValueKind.DateOnly; break;
             case "time":
-            case "time without time zone": kind = SqlValueKind.TimeOnly; return true;
+            case "time without time zone": kind = SqlValueKind.TimeOnly; break;
             case "timestamp":
-            case "timestamp without time zone": kind = SqlValueKind.DateTime; return true;
+            case "timestamp without time zone": kind = SqlValueKind.DateTime; break;
             case "timestamptz":
-            case "timestamp with time zone": kind = SqlValueKind.DateTimeOffset; return true;
-            case "interval": kind = SqlValueKind.Interval; return true;
-            case "bytea": kind = SqlValueKind.Bytes; return true;
+            case "timestamp with time zone": kind = SqlValueKind.DateTimeOffset; break;
+            case "interval": kind = SqlValueKind.Interval; break;
+            case "bytea": kind = SqlValueKind.Bytes; break;
             default:
-                kind = SqlValueKind.Error;
+                type = new SqlTypeShape(SqlValueKind.Error);
                 return false;
         }
+
+        type = new SqlTypeShape(kind, isArray);
+        return true;
     }
 
     public string ToClrTypeName(SqlValueKind kind, bool nullable) => SqlTypeMapper.ToClrName(kind, nullable);
@@ -314,6 +338,17 @@ public sealed class PostgreSqlTypeMapper : ISqlTypeMapper
             case SqlValueKind.Interval: return "interval";
             default: return null;
         }
+    }
+
+    internal string? ToDatabaseTypeName(SqlTypeShape type)
+    {
+        if (!type.IsArray)
+        {
+            return ToDatabaseTypeName(type.Kind);
+        }
+
+        var elementName = PostgreSqlElementTypeName(type.Kind);
+        return elementName == null ? null : elementName + "[]";
     }
 
     public string MapMigrationType(
@@ -370,6 +405,43 @@ public sealed class PostgreSqlTypeMapper : ISqlTypeMapper
             new[] { ' ', '\t', '\r', '\n' },
             StringSplitOptions.RemoveEmptyEntries);
         return string.Join(" ", parts);
+    }
+
+    private static int RemoveArraySuffixes(ref string value)
+    {
+        var rank = 0;
+        while (value.EndsWith("[]", StringComparison.Ordinal))
+        {
+            rank++;
+            value = value.Substring(0, value.Length - 2).TrimEnd();
+        }
+
+        return rank;
+    }
+
+    private static string? PostgreSqlElementTypeName(SqlValueKind kind)
+    {
+        switch (kind)
+        {
+            case SqlValueKind.Bool: return "boolean";
+            case SqlValueKind.Int16: return "smallint";
+            case SqlValueKind.Int32: return "integer";
+            case SqlValueKind.Int64: return "bigint";
+            case SqlValueKind.Float: return "real";
+            case SqlValueKind.Double: return "double precision";
+            case SqlValueKind.Decimal: return "numeric";
+            case SqlValueKind.String: return "text";
+            case SqlValueKind.Json: return "json";
+            case SqlValueKind.JsonBinary: return "jsonb";
+            case SqlValueKind.Guid: return "uuid";
+            case SqlValueKind.DateOnly: return "date";
+            case SqlValueKind.TimeOnly: return "time without time zone";
+            case SqlValueKind.DateTime: return "timestamp without time zone";
+            case SqlValueKind.DateTimeOffset: return "timestamp with time zone";
+            case SqlValueKind.Interval: return "interval";
+            case SqlValueKind.Bytes: return "bytea";
+            default: return null;
+        }
     }
 
     private static string RemoveTypeModifiers(string value)

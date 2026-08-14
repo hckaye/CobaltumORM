@@ -273,6 +273,126 @@ public sealed class SourceGenerationTests
     }
 
     [Fact]
+    public async Task ConversionHandlersMapArrayElementsAndWholeArrays()
+    {
+        const string source = """
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            public readonly record struct CustomInt(int Value);
+
+            public sealed record CustomIntArray(int[] Values);
+
+            public sealed class CustomIntHandler : IValueHandler<int, CustomInt>
+            {
+                public CustomInt Convert(int value) => new CustomInt(value * 10);
+            }
+
+            public sealed class CustomIntArrayHandler : IValueHandler<int[], CustomIntArray>
+            {
+                public CustomIntArray Convert(int[] values) => new CustomIntArray(values);
+            }
+
+            public sealed record ArrayProjection(
+                [ResultColumn("single"), ValueHandler<CustomIntHandler>] CustomInt Single,
+                [ResultColumn("elements"), ValueHandler<CustomIntHandler>] CustomInt[] Elements,
+                [ResultColumn("nullable_elements"), ValueHandler<CustomIntHandler>] CustomInt[]? NullableElements,
+                [ResultColumn("wrapped"), ValueHandler<CustomIntArrayHandler>] CustomIntArray Wrapped);
+
+            [Query<ArrayProjection>(
+                "ReadArrays",
+                "SELECT id AS single, numbers AS elements, optional_numbers AS nullable_elements, " +
+                "numbers AS wrapped FROM array_values")]
+            public static partial class ArrayQueries
+            {
+            }
+
+            public static class Consumer
+            {
+                public static async Task<int> Run(DbConnection connection)
+                {
+                    var rows = await ArrayQueries.ReadArraysAsync(connection);
+                    return rows[0].Single.Value +
+                        rows[0].Elements[0].Value + rows[0].Elements[1].Value +
+                        rows[0].Wrapped.Values[0] + rows[0].Wrapped.Values[1] +
+                        (rows[0].NullableElements is null ? 100 : 0);
+                }
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__arrays.sql", "CREATE TABLE array_values (id integer NOT NULL, numbers integer[] NOT NULL, optional_numbers integer[]);")
+            });
+
+        AssertNoErrors(result);
+        Assert.Contains(
+            "CobaltumHandlerCache<global::TestApp.CustomIntHandler>.Instance.Convert(",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CobaltumArrayHandler.Convert<",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CobaltumArrayHandler.ConvertNullable<",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CobaltumHandlerCache<global::TestApp.CustomIntArrayHandler>.Instance.Convert(",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+
+        var assembly = result.EmitAndLoad();
+        var connection = new QueryFakeDbConnection(
+            new object?[] { 5, new[] { 1, 2 }, System.DBNull.Value, new[] { 3, 4 } });
+        var consumer = assembly.GetType("TestApp.Consumer", throwOnError: true)!;
+        var task = Assert.IsAssignableFrom<Task<int>>(consumer.GetMethod("Run")!.Invoke(
+            null,
+            new object[] { connection }));
+        Assert.Equal(187, await task);
+    }
+
+    [Fact]
+    public void RejectsConversionHandlerWithAnIncompatibleSourceType()
+    {
+        const string source = """
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            public readonly record struct CustomInt(int Value);
+
+            public sealed class WrongHandler : IValueHandler<string, CustomInt>
+            {
+                public CustomInt Convert(string value) => new CustomInt(value.Length);
+            }
+
+            public sealed record Projection(
+                [ValueHandler<WrongHandler>] CustomInt Id);
+
+            [Query<Projection>("Read", "SELECT id FROM users")]
+            public static partial class Queries
+            {
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL);")
+            });
+
+        Assert.Contains(result.AllDiagnostics, diagnostic =>
+            diagnostic.Id == "COB009" &&
+            diagnostic.GetMessage().Contains("cannot convert", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void InvalidExplicitResultHandlerFailsAtBuildTime()
     {
         const string source = """
@@ -369,6 +489,40 @@ public sealed class SourceGenerationTests
         Assert.Contains("CobaltumParameter.AddConfigured", result.GeneratedText, StringComparison.Ordinal);
         Assert.Contains("((global::Npgsql.NpgsqlParameter)parameter).DataTypeName = \"jsonb\"", result.GeneratedText, StringComparison.Ordinal);
         Assert.Contains("CobaltumColumn<EventsRow, global::System.String>(\"\\\"document\\\"\", global::System.Data.DbType.String, \"jsonb\", static parameter", result.GeneratedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GeneratesPostgreSqlArrayParametersAndResultReaders()
+    {
+        const string source = """
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            [Query(
+                "FindArrays",
+                "SELECT numbers, labels, identifiers FROM array_values WHERE numbers @> @required AND @value = ANY(numbers)")]
+            public static partial class Queries
+            {
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__arrays.sql", "CREATE TABLE array_values (numbers integer[] NOT NULL, labels text[], identifiers uuid[] NOT NULL);")
+            });
+
+        AssertNoErrors(result);
+        Assert.Contains("global::System.Int32[] Numbers", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("global::System.String[]? Labels", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("global::System.Guid[] Identifiers", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("global::System.Int32[]? Required", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("DbType.Object", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("DataTypeName = \"integer[]\"", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("reader.GetFieldValue<global::System.Int32[]>", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("reader.GetFieldValue<global::System.String[]>", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("CobaltumColumn<ArrayValuesRow, global::System.Int32[]>", result.GeneratedText, StringComparison.Ordinal);
     }
 
     [Fact]

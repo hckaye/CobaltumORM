@@ -357,6 +357,52 @@ public sealed class CompileTimeQueryBuildTests
     }
 
     [Fact]
+    public void PostgreSqlArrayTypesSurviveTheBuildTransform()
+    {
+        var result = BuildFixture("""
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+            using CobaltumOrm.Migrations;
+
+            [Migration(2, "add numbers")]
+            public sealed class AddNumbersMigration : Migration
+            {
+                public override void Up()
+                {
+                    Alter.Table("users")
+                        .AddColumn("numbers").AsCustom("integer[]").NotNullable();
+                }
+
+                public override void Down()
+                {
+                    Delete.Column("numbers").FromTable("users");
+                }
+            }
+
+            public static class Consumer
+            {
+                public static async Task<int[]> Read(DbConnection connection, int[] required)
+                {
+                    var rows = await connection
+                        .Query($"SELECT numbers FROM users WHERE numbers @> {required}")
+                        .ReadAsync();
+                    return rows[0].Numbers;
+                }
+            }
+            """);
+
+        Assert.True(result.Succeeded, result.Output);
+        var generated = File.ReadAllText(Directory
+            .EnumerateFiles(result.Directory, "CobaltumOrm.RawQueries.g.cs", SearchOption.AllDirectories)
+            .Single());
+        Assert.Contains("global::System.Int32[]", generated, StringComparison.Ordinal);
+        Assert.Contains("DbType.Object", generated, StringComparison.Ordinal);
+        Assert.Contains("DataTypeName = \"integer[]\"", generated, StringComparison.Ordinal);
+        Assert.Contains("reader.GetFieldValue<global::System.Int32[]>", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DynamicAndStructuralSqlRequireTheExplicitEscapeHatch()
     {
         var dynamic = BuildFixture("""

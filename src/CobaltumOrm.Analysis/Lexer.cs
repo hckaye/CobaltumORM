@@ -17,6 +17,8 @@ internal enum TokenKind
     Dot,
     OpenParen,
     CloseParen,
+    OpenBracket,
+    CloseBracket,
     Semicolon,
     Star,
     Plus,
@@ -182,6 +184,14 @@ internal sealed class Lexer
             case '.': return Simple(TokenKind.Dot, start);
             case '(': return Simple(TokenKind.OpenParen, start);
             case ')': return Simple(TokenKind.CloseParen, start);
+            case '[':
+                if (_syntax.TryGetIdentifierDelimiter(current, out var bracketDelimiter))
+                {
+                    return LexQuotedIdentifier(start, bracketDelimiter);
+                }
+
+                return Simple(TokenKind.OpenBracket, start);
+            case ']': return Simple(TokenKind.CloseBracket, start);
             case ';': return Simple(TokenKind.Semicolon, start);
             case '*': return Simple(TokenKind.Star, start);
             case '+': return Simple(TokenKind.Plus, start);

@@ -279,6 +279,31 @@ public sealed class QueryTypeProfile
     public string ToClrName(SqlValueKind kind, bool nullable) => Mapper.ToClrTypeName(kind, nullable);
     public string? ToDatabaseTypeName(SqlValueKind kind) => Mapper.ToDatabaseTypeName(kind);
 
+    internal bool TryMapType(string sqlType, out SqlTypeShape type)
+    {
+        if (Mapper is PostgreSqlTypeMapper postgreSql)
+        {
+            return postgreSql.TryMapType(sqlType, out type);
+        }
+
+        if (Mapper.TryMap(sqlType, out var kind))
+        {
+            type = new SqlTypeShape(kind);
+            return true;
+        }
+
+        type = new SqlTypeShape(SqlValueKind.Error);
+        return false;
+    }
+
+    internal string ToClrName(SqlTypeShape type, bool nullable) =>
+        type.IsArray ? SqlTypeMapper.ToClrName(type, nullable) : Mapper.ToClrTypeName(type.Kind, nullable);
+
+    internal string? ToDatabaseTypeName(SqlTypeShape type) =>
+        Mapper is PostgreSqlTypeMapper postgreSql
+            ? postgreSql.ToDatabaseTypeName(type)
+            : type.IsArray ? null : Mapper.ToDatabaseTypeName(type.Kind);
+
     public string NormalizeSqlTypeName(string sqlType)
     {
         if (sqlType is null)
@@ -300,6 +325,30 @@ public sealed class QueryTypeProfile
     {
         result = _unify(left, right);
         return result != SqlValueKind.Error;
+    }
+
+    internal bool TryUnify(SqlTypeShape left, SqlTypeShape right, out SqlTypeShape result)
+    {
+        if (!left.IsKnown)
+        {
+            result = right;
+            return right.Kind != SqlValueKind.Error;
+        }
+
+        if (!right.IsKnown)
+        {
+            result = left;
+            return left.Kind != SqlValueKind.Error;
+        }
+
+        if (left.IsArray != right.IsArray || !TryUnify(left.Kind, right.Kind, out var kind))
+        {
+            result = new SqlTypeShape(SqlValueKind.Error);
+            return false;
+        }
+
+        result = new SqlTypeShape(kind, left.IsArray);
+        return true;
     }
 
     public SqlValueKind AggregateResult(string aggregateName, SqlValueKind argumentKind)

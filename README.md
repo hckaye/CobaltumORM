@@ -861,9 +861,11 @@ public static class UserReader
 
 The `record` type for `rows` has `Id` and `DisplayName` properties. Accessing a property that is not selected, such as `rows[0].Email`, produces a normal C# compile error. Invalid SQL syntax, columns missing from the schema, and parameters whose types cannot be inferred also produce compile errors. Constant parameter names and C# types supplied to `WithParameter` are checked against the parsed SQL. These checks apply to supported statements whose contents are known at build time.
 
-Supported `SELECT` syntax includes CTEs, recursive CTEs, `VALUES`, derived tables, correlated subqueries, `DISTINCT ON`, set operations, joins, filters, grouping, ordering, `LIMIT` / `OFFSET` / `FETCH`, row locking, `CASE`, casts, date and interval literals, inline or named windows, aggregate `FILTER`, and common scalar and aggregate functions. PostgreSQL operators covered by the analyzer include `ILIKE`, regular-expression matching, `IS DISTINCT FROM`, JSON access, containment, overlap, modulo, and exponentiation. See the [supported PostgreSQL SELECT syntax](docs/design/poc-sql-type-inference.md#supported-select-syntax) for details.
+Supported `SELECT` syntax includes CTEs, recursive CTEs, `VALUES`, derived tables, correlated subqueries, `DISTINCT ON`, set operations, joins, filters, grouping, ordering, `LIMIT` / `OFFSET` / `FETCH`, row locking, `CASE`, casts, date and interval literals, `ARRAY[...]` constructors and subscripts, `ANY` / `ALL`, `unnest`, `generate_subscripts`, inline or named windows, aggregate `FILTER`, and common scalar and aggregate functions. PostgreSQL operators covered by the analyzer include `ILIKE`, regular-expression matching, `IS DISTINCT FROM`, JSON access, array and JSON containment, array overlap, modulo, and exponentiation. See the [supported PostgreSQL SELECT syntax](docs/design/poc-sql-type-inference.md#supported-select-syntax) for details.
 
-`WithParameter` passes values as `DbParameter` instances instead of concatenating them into SQL. For checked statements, the parameter `DbType` is inferred. PostgreSQL type names are also passed to the database provider for `json` and `jsonb` parameters. Missing parameter values are detected before `ReadAsync` runs.
+PostgreSQL columns such as `integer[]`, `text[]`, and `uuid[]` generate `int[]`, `string[]`, and `Guid[]`. A nullable array column generates a nullable array reference such as `string[]?`. Array parameters use the same CLR element mapping. Generated queries set the PostgreSQL array type name on Npgsql parameters and read results with the corresponding CLR array type.
+
+`WithParameter` passes values as `DbParameter` instances instead of concatenating them into SQL. For checked statements, the parameter `DbType` is inferred. PostgreSQL type names are also passed to the database provider for `json`, `jsonb`, and array parameters. Missing parameter values are detected before `ReadAsync` runs.
 
 ## Caller-supplied result types
 
@@ -897,7 +899,30 @@ var rows = await connection
     .ReadAsync();
 ```
 
-`ValueHandler<THandler>` assigns a handler to one value. `THandler` must implement `IValueHandler<TValue>`. To control the entire row, put `[ResultHandler<THandler>]` on the result type and implement `IResultHandler<TResult>`. A custom handler takes responsibility for the conversion it controls, while the SQL itself remains checked by `Query`.
+`ValueHandler<THandler>` assigns a handler to one value. `IValueHandler<TValue>` reads the column directly from `DbDataReader`. `IValueHandler<TSource, TValue>` receives the CLR value inferred from the SQL column and converts it to the result member type.
+
+The two-type handler also maps arrays. When a checked query returns `TSource[]` and the result member is `TValue[]`, a handler that implements `IValueHandler<TSource, TValue>` is applied to every element. A handler that implements `IValueHandler<TSource[], TArray>` converts the complete array to a wrapper or another non-array type.
+
+```csharp
+public readonly record struct CustomInt(int Value);
+public sealed record CustomIntArray(int[] Values);
+
+public sealed class CustomIntHandler : IValueHandler<int, CustomInt>
+{
+    public CustomInt Convert(int value) => new(value);
+}
+
+public sealed class CustomIntArrayHandler : IValueHandler<int[], CustomIntArray>
+{
+    public CustomIntArray Convert(int[] values) => new(values);
+}
+
+public sealed record ArrayView(
+    [ValueHandler<CustomIntHandler>] CustomInt[] Numbers,
+    [ResultColumn("numbers_copy"), ValueHandler<CustomIntArrayHandler>] CustomIntArray Wrapped);
+```
+
+Conversion handlers require checked `Query` SQL because the source CLR type must be known at build time. `NoCheckQuery<TResult>` continues to support `IValueHandler<TValue>`, which reads the column itself. To control the entire row, put `[ResultHandler<THandler>]` on the result type and implement `IResultHandler<TResult>`. A custom handler takes responsibility for the conversion it controls, while the SQL itself remains checked by `Query`.
 
 Handler types must have a public parameterless constructor. One instance is cached and called directly from generated code, so handlers must be stateless and thread-safe. Result mapping does not scan types or invoke members through reflection at runtime.
 
@@ -955,7 +980,7 @@ public static class UserWriter
 
 `ExecuteAsync` returns the affected row count reported by the database provider. Parameter values become `DbParameter` instances, and `null` becomes `DBNull.Value`. Constant SQL is parsed at build time. Its syntax, target schema, tables, columns, expression types, and parameter types are checked against the schema after migrations are applied. Supported forms include `INSERT ... VALUES`, `DEFAULT VALUES`, `INSERT ... SELECT`, `ON CONFLICT`, `UPDATE ... FROM`, `DELETE ... USING`, `TRUNCATE`, `RETURNING`, and CTEs around data modification statements. Permissions, constraints, triggers, and outcomes that depend on stored data cannot be checked without connecting to the database. Schema changes belong in migrations rather than `Query`.
 
-The compile-time analyzer does not cover every PostgreSQL construct. Unsupported forms include `MERGE`, table functions in `FROM`, `GROUPING SETS`, `CUBE`, `ROLLUP`, array constructors, and user-defined function result types. Window frame clauses are accepted but their contents are not semantically validated. Use `NoCheckQuery` when one of these forms is required.
+The compile-time analyzer does not cover every PostgreSQL construct. Unsupported forms include `MERGE`, table functions in `FROM` other than `unnest` and `generate_subscripts`, `GROUPING SETS`, `CUBE`, `ROLLUP`, multidimensional array types and constructors, array slices, and user-defined function result types. Window frame clauses are accepted but their contents are not semantically validated. Use `NoCheckQuery` when one of these forms is required.
 
 When direct SQL passes a string to a PostgreSQL `json` or `jsonb` parameter, configure the Npgsql parameter directly: `WithConfiguredParameter("@document", json, DbType.String, static parameter => ((NpgsqlParameter)parameter).DataTypeName = "jsonb")`. Generated queries apply this setting automatically.
 
@@ -1026,7 +1051,7 @@ dotnet publish -c Release -r linux-x64
 
 The source generator creates `CobaltumMigrationCatalog.All` without scanning assemblies at runtime. Pass this catalog to `MigrationRunner` and `MigrationProjectHost`, as shown in the migration examples above. A handwritten catalog can use `MigrationInfo.Create<TMigration>(version, description)`. Caller-supplied query result types and their custom handlers are also called through generated code without runtime reflection.
 
-CobaltumORM generates direct Npgsql parameter configuration for PostgreSQL `json` and `jsonb`; other generated provider bindings use `DbType`. PostgreSQL projects must reference Npgsql, as shown in the installation and migration project examples.
+CobaltumORM generates direct Npgsql parameter configuration for PostgreSQL `json`, `jsonb`, and array types; other generated provider bindings use `DbType`. PostgreSQL projects must reference Npgsql, as shown in the installation and migration project examples.
 
 The selected ADO.NET driver must also support the target deployment mode. Resolve any trim or AOT warning reported from the driver before publishing.
 

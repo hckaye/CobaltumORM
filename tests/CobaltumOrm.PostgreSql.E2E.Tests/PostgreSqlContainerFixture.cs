@@ -30,9 +30,11 @@ public sealed class PostgreSqlContainerFixture : IAsyncLifetime
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO e2e_values (id, local_time, document, big_id) VALUES
-                (1, TIMESTAMP '2026-08-10 12:34:56', '{"active":true}'::jsonb, 9223372036854775807),
-                (2, TIMESTAMP '2026-08-11 01:02:03', '{"active":false}'::jsonb, 1);
+            INSERT INTO e2e_values (id, local_time, document, big_id, numbers, labels, identifiers) VALUES
+                (1, TIMESTAMP '2026-08-10 12:34:56', '{"active":true}'::jsonb, 9223372036854775807,
+                 ARRAY[1, 2, 3], ARRAY['one', 'two'], ARRAY['11111111-1111-1111-1111-111111111111'::uuid]),
+                (2, TIMESTAMP '2026-08-11 01:02:03', '{"active":false}'::jsonb, 1,
+                 ARRAY[4, 5], NULL, ARRAY['22222222-2222-2222-2222-222222222222'::uuid]);
             """;
         await command.ExecuteNonQueryAsync();
     }

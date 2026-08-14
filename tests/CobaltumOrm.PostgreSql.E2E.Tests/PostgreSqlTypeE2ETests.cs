@@ -80,6 +80,49 @@ public sealed class PostgreSqlTypeE2ETests
     }
 
     [Fact]
+    public async Task ArrayParametersAndResultsUseNpgsqlArrayTypes()
+    {
+        await using var connection = await OpenConnectionAsync();
+
+        var rows = await PostgreSqlE2EQueries.FindByArrayAsync(
+            connection,
+            new[] { 2, 3 },
+            2,
+            3,
+            new[] { "two" },
+            new[] { Guid.Parse("11111111-1111-1111-1111-111111111111") });
+        var tableRows = await connection.Query(
+            Tables.E2eValues.Where(Tables.E2eValues.Numbers.Equal(new[] { 1, 2, 3 })));
+
+        var row = Assert.Single(rows);
+        Assert.Equal(1, row.Id);
+        Assert.Equal(new[] { 1, 2, 3 }, row.Numbers);
+        Assert.Equal(new[] { "one", "two" }, row.Labels);
+        Assert.Equal(
+            new[] { Guid.Parse("11111111-1111-1111-1111-111111111111") },
+            row.Identifiers);
+        Assert.Equal(1, Assert.Single(tableRows).Id);
+    }
+
+    [Fact]
+    public async Task ArrayConstructorsSubscriptsAndUnnestRunAgainstPostgreSql()
+    {
+        await using var connection = await OpenConnectionAsync();
+
+        var expressions = Assert.Single(await PostgreSqlE2EQueries.ReadArrayExpressionsAsync(connection, 1));
+        var nullArray = Assert.Single(await PostgreSqlE2EQueries.ReadArrayExpressionsAsync(connection, 2));
+        var expanded = await PostgreSqlE2EQueries.ExpandNumbersAsync(connection, 1);
+        var subscripts = await PostgreSqlE2EQueries.ReadArraySubscriptsAsync(connection, 1);
+
+        Assert.Equal(new[] { 7, 8, 9 }, expressions.Constructed);
+        Assert.Equal(2, expressions.SecondItem);
+        Assert.Equal(new[] { "one", "two" }, expressions.Labels);
+        Assert.Null(nullArray.Labels);
+        Assert.Equal(new int?[] { 1, 2, 3 }, expanded.Select(row => row.Item).ToArray());
+        Assert.Equal(new[] { 1, 2, 3 }, subscripts.Select(row => row.Position).ToArray());
+    }
+
+    [Fact]
     public async Task RawParametersKeepSqlInjectionPayloadsOutOfCommandText()
     {
         await using var connection = await OpenConnectionAsync();
@@ -145,7 +188,7 @@ public sealed class PostgreSqlTypeE2ETests
         Assert.Empty(dryRun.Entries);
         var table = Assert.Single(dryRun.FinalSchema.Tables);
         Assert.Equal("e2e_values", table.Name);
-        Assert.Equal(4, table.Columns.Count);
+        Assert.Equal(7, table.Columns.Count);
 
         var missingHistoryDryRun = await new MigrationRunner(
                 new PostgreSqlMigrationAdapter(),

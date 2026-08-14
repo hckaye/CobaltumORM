@@ -8,6 +8,7 @@ internal sealed class Parser
     private readonly IReadOnlyList<Token> _tokens;
     private readonly List<Diagnostic> _diagnostics;
     private readonly QueryTypeProfile _types;
+    private readonly bool _supportsPostgreSqlArrays;
     private int _position;
 
     internal Parser(IReadOnlyList<Token> tokens, List<Diagnostic> diagnostics)
@@ -22,7 +23,9 @@ internal sealed class Parser
     {
         _tokens = tokens;
         _diagnostics = diagnostics;
-        _types = (profile ?? throw new ArgumentNullException(nameof(profile))).Types;
+        var dialect = profile ?? throw new ArgumentNullException(nameof(profile));
+        _types = dialect.Types;
+        _supportsPostgreSqlArrays = dialect.Types.Mapper is PostgreSqlTypeMapper;
     }
 
     internal SqlStatement? Parse()
@@ -517,7 +520,7 @@ internal sealed class Parser
     private UpdateStatement ParseUpdate()
     {
         Expect(TokenKind.Update, "Expected UPDATE.");
-        var table = ParseTableReference();
+        var table = ParseTableReference(allowFunction: false);
         Expect(TokenKind.Set, "Expected SET after the UPDATE table.");
         var assignments = new List<UpdateAssignment>();
         do
@@ -554,7 +557,7 @@ internal sealed class Parser
     {
         Expect(TokenKind.Insert, "Expected INSERT.");
         Expect(TokenKind.Into, "Expected INTO after INSERT.");
-        var table = ParseTableReference();
+        var table = ParseTableReference(allowFunction: false);
         var columns = new List<SqlIdentifier>();
         if (Match(TokenKind.OpenParen))
         {
@@ -709,7 +712,7 @@ internal sealed class Parser
     {
         Expect(TokenKind.Delete, "Expected DELETE.");
         Expect(TokenKind.From, "Expected FROM after DELETE.");
-        var table = ParseTableReference();
+        var table = ParseTableReference(allowFunction: false);
         var usingTables = new List<TableReference>();
         if (Match(TokenKind.Using))
         {
@@ -796,10 +799,10 @@ internal sealed class Parser
         return items;
     }
 
-    private TableReference ParseTableReference()
+    private TableReference ParseTableReference(bool allowFunction = true)
     {
         var lateral = Match(TokenKind.Lateral);
-        if (Match(TokenKind.OpenParen))
+        if (allowFunction && Match(TokenKind.OpenParen))
         {
             var query = ParseStatement(true);
             Expect(TokenKind.CloseParen, "Expected ')' after the derived-table query.");
@@ -836,6 +839,47 @@ internal sealed class Parser
         {
             schema = first;
             name = ParseIdentifier("Expected a table name after '.'.");
+        }
+
+        if (allowFunction && Match(TokenKind.OpenParen))
+        {
+            if (schema != null)
+            {
+                Report(schema.Span, "Schema-qualified table functions are not supported.");
+            }
+
+            var function = ParseFunction(name);
+            SqlIdentifier? functionAlias = null;
+            if (Match(TokenKind.As))
+            {
+                functionAlias = ParseIdentifier("Expected a table-function alias after AS.");
+            }
+            else if (IsIdentifier(Current.Kind))
+            {
+                functionAlias = TakeIdentifier();
+            }
+
+            var functionColumnAliases = new List<SqlIdentifier>();
+            if (functionAlias != null && Match(TokenKind.OpenParen))
+            {
+                if (Current.Kind != TokenKind.CloseParen)
+                {
+                    do
+                    {
+                        functionColumnAliases.Add(ParseIdentifier("Expected a table-function column alias."));
+                    }
+                    while (Match(TokenKind.Comma));
+                }
+
+                Expect(TokenKind.CloseParen, "Expected ')' after table-function column aliases.");
+            }
+
+            return new TableReference(
+                function,
+                functionAlias ?? name,
+                functionAlias,
+                functionColumnAliases,
+                lateral);
         }
 
         SqlIdentifier? alias = null;
@@ -976,12 +1020,12 @@ internal sealed class Parser
         var expression = ParseConcat();
         while (true)
         {
-            if (Match(TokenKind.Equal)) expression = Binary(expression, "=", ParseConcat());
-            else if (Match(TokenKind.NotEqual)) expression = Binary(expression, "<>", ParseConcat());
-            else if (Match(TokenKind.Less)) expression = Binary(expression, "<", ParseConcat());
-            else if (Match(TokenKind.LessEqual)) expression = Binary(expression, "<=", ParseConcat());
-            else if (Match(TokenKind.Greater)) expression = Binary(expression, ">", ParseConcat());
-            else if (Match(TokenKind.GreaterEqual)) expression = Binary(expression, ">=", ParseConcat());
+            if (Match(TokenKind.Equal)) expression = ParseComparedValue(expression, "=");
+            else if (Match(TokenKind.NotEqual)) expression = ParseComparedValue(expression, "<>");
+            else if (Match(TokenKind.Less)) expression = ParseComparedValue(expression, "<");
+            else if (Match(TokenKind.LessEqual)) expression = ParseComparedValue(expression, "<=");
+            else if (Match(TokenKind.Greater)) expression = ParseComparedValue(expression, ">");
+            else if (Match(TokenKind.GreaterEqual)) expression = ParseComparedValue(expression, ">=");
             else if (Match(TokenKind.Is))
             {
                 var negated = Match(TokenKind.Not);
@@ -1099,6 +1143,34 @@ internal sealed class Parser
         return expression;
     }
 
+    private Expression ParseComparedValue(Expression left, string op)
+    {
+        QuantifierKind? quantifier = null;
+        if (_supportsPostgreSqlArrays && MatchWord("ANY"))
+        {
+            quantifier = QuantifierKind.Any;
+        }
+        else if (_supportsPostgreSqlArrays && Match(TokenKind.All))
+        {
+            quantifier = QuantifierKind.All;
+        }
+
+        if (!quantifier.HasValue)
+        {
+            return Binary(left, op, ParseConcat());
+        }
+
+        Expect(TokenKind.OpenParen, $"Expected '(' after {quantifier.Value.ToString().ToUpperInvariant()}.");
+        var array = ParseExpression();
+        var close = Expect(TokenKind.CloseParen, "Expected ')' after the quantified array expression.");
+        return new QuantifiedComparisonExpression(
+            left,
+            op,
+            quantifier.Value,
+            array,
+            FromBounds(left.Span.Start, EndOf(close)));
+    }
+
     private IReadOnlyList<Expression> ParseInValues(out SqlStatement? subquery)
     {
         var values = new List<Expression>();
@@ -1188,13 +1260,30 @@ internal sealed class Parser
         }
 
         var expression = ParsePrimary();
-        while (Match(TokenKind.DoubleColon))
+        while (true)
         {
-            var type = ParseTypeName();
-            expression = new CastExpression(
-                expression,
-                type,
-                FromBounds(expression.Span.Start, Previous.Span.Start + Previous.Span.Length));
+            if (Match(TokenKind.DoubleColon))
+            {
+                var type = ParseTypeName();
+                expression = new CastExpression(
+                    expression,
+                    type,
+                    FromBounds(expression.Span.Start, Previous.Span.Start + Previous.Span.Length));
+                continue;
+            }
+
+            if (Match(TokenKind.OpenBracket))
+            {
+                var index = ParseExpression();
+                var close = Expect(TokenKind.CloseBracket, "Expected ']' after an array subscript.");
+                expression = new ArraySubscriptExpression(
+                    expression,
+                    index,
+                    FromBounds(expression.Span.Start, EndOf(close)));
+                continue;
+            }
+
+            break;
         }
 
         return expression;
@@ -1203,6 +1292,27 @@ internal sealed class Parser
     private Expression ParsePrimary()
     {
         var token = Current;
+        if (_supportsPostgreSqlArrays &&
+            Current.Kind == TokenKind.Identifier &&
+            string.Equals(Current.Text, "ARRAY", StringComparison.OrdinalIgnoreCase) &&
+            Peek(1).Kind == TokenKind.OpenBracket)
+        {
+            Advance();
+            Advance();
+            var elements = new List<Expression>();
+            if (Current.Kind != TokenKind.CloseBracket)
+            {
+                do
+                {
+                    elements.Add(ParseExpression());
+                }
+                while (Match(TokenKind.Comma));
+            }
+
+            var close = Expect(TokenKind.CloseBracket, "Expected ']' after the ARRAY constructor.");
+            return new ArrayExpression(elements, FromBounds(token.Span.Start, EndOf(close)));
+        }
+
         if (Match(TokenKind.OpenParen))
         {
             if (Current.Kind == TokenKind.Select || Current.Kind == TokenKind.With)
@@ -1389,7 +1499,7 @@ internal sealed class Parser
             FromBounds(name.Span.Start, EndOf(close)));
     }
 
-    private Expression ParseFunction(SqlIdentifier name)
+    private FunctionExpression ParseFunction(SqlIdentifier name)
     {
         var arguments = new List<Expression>();
         var distinct = Match(TokenKind.Distinct);
@@ -1498,6 +1608,12 @@ internal sealed class Parser
             while (Match(TokenKind.Comma));
             type += "(" + string.Join(",", modifiers) + ")";
             Expect(TokenKind.CloseParen, "Expected ')' after type size.");
+        }
+
+        while (Match(TokenKind.OpenBracket))
+        {
+            Expect(TokenKind.CloseBracket, "Expected ']' in an array type name.");
+            type += "[]";
         }
 
         return type;

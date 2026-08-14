@@ -16,6 +16,33 @@ internal enum ResultMappingKind
     Handler,
 }
 
+internal enum ValueHandlerMappingKind
+{
+    Reader,
+    Converter,
+    ArrayElements,
+}
+
+internal sealed class ValueHandlerMapping
+{
+    internal ValueHandlerMapping(
+        ITypeSymbol handlerType,
+        ValueHandlerMappingKind kind,
+        ITypeSymbol? sourceType = null,
+        ITypeSymbol? valueType = null)
+    {
+        HandlerType = handlerType;
+        Kind = kind;
+        SourceType = sourceType;
+        ValueType = valueType;
+    }
+
+    internal ITypeSymbol HandlerType { get; }
+    internal ValueHandlerMappingKind Kind { get; }
+    internal ITypeSymbol? SourceType { get; }
+    internal ITypeSymbol? ValueType { get; }
+}
+
 internal sealed class ResultMapping
 {
     internal ResultMapping(
@@ -43,20 +70,20 @@ internal sealed class ResultMappingTarget
         string columnType,
         string columnName,
         ISymbol? target,
-        ITypeSymbol? valueHandlerType = null)
+        ValueHandlerMapping? valueHandler = null)
     {
         ColumnOrdinal = columnOrdinal;
         ColumnType = columnType;
         ColumnName = columnName;
         Target = target;
-        ValueHandlerType = valueHandlerType;
+        ValueHandler = valueHandler;
     }
 
     internal int ColumnOrdinal { get; }
     internal string ColumnType { get; }
     internal string ColumnName { get; }
     internal ISymbol? Target { get; }
-    internal ITypeSymbol? ValueHandlerType { get; }
+    internal ValueHandlerMapping? ValueHandler { get; }
 }
 
 internal sealed class UncheckedResultMapping
@@ -179,6 +206,16 @@ internal static class ResultMappingFactory
                     return false;
                 }
 
+                if (valueHandlerType != null &&
+                    !TryResolveUncheckedValueHandler(
+                        compilation,
+                        valueHandlerType,
+                        parameter.Type,
+                        out error))
+                {
+                    return false;
+                }
+
                 if (!names.Add(NormalizeName(columnName)))
                 {
                     error = $"result column name '{columnName}' is ambiguous after name matching";
@@ -223,6 +260,17 @@ internal static class ResultMappingFactory
                     memberType,
                     out var columnName,
                     out var valueHandlerType,
+                    out error))
+            {
+                return false;
+            }
+
+
+            if (valueHandlerType != null &&
+                !TryResolveUncheckedValueHandler(
+                    compilation,
+                    valueHandlerType,
+                    memberType,
                     out error))
             {
                 return false;
@@ -350,12 +398,30 @@ internal static class ResultMappingFactory
 
                 if (!columnsByName.TryGetValue(NormalizeName(columnName), out var columnOrdinal) ||
                     !usedColumnOrdinals.Add(columnOrdinal) ||
-                    !TryResolveColumnType(csharpCompilation, analysis.Columns[columnOrdinal].ClrType, out var sourceType) ||
-                    (valueHandlerType == null &&
-                     !IsCompatible(csharpCompilation, sourceType!, parameter.Type)))
+                    !TryResolveColumnType(csharpCompilation, analysis.Columns[columnOrdinal].ClrType, out var sourceType))
                 {
                     valid = false;
                     break;
+                }
+
+                ValueHandlerMapping? valueHandler = null;
+                if (valueHandlerType == null)
+                {
+                    if (!IsCompatible(csharpCompilation, sourceType!, parameter.Type))
+                    {
+                        valid = false;
+                        break;
+                    }
+                }
+                else if (!TryResolveValueHandler(
+                             compilation,
+                             valueHandlerType,
+                             sourceType!,
+                             parameter.Type,
+                             out valueHandler,
+                             out error))
+                {
+                    return false;
                 }
 
                 targets.Add(new ResultMappingTarget(
@@ -363,7 +429,7 @@ internal static class ResultMappingFactory
                     analysis.Columns[columnOrdinal].ClrType,
                     analysis.Columns[columnOrdinal].Name,
                     parameter,
-                    valueHandlerType));
+                    valueHandler));
             }
 
             if (valid)
@@ -425,11 +491,29 @@ internal static class ResultMappingFactory
 
             var member = members[0];
             var memberType = MemberType(member.Member);
-            if (!TryResolveColumnType(csharpCompilation, column.ClrType, out var sourceType) ||
-                (member.HandlerType == null &&
-                 !IsCompatible(csharpCompilation, sourceType!, memberType)))
+            if (!TryResolveColumnType(csharpCompilation, column.ClrType, out var sourceType))
             {
                 error = $"returned column '{column.Name}' has CLR type '{ColumnDisplay(column.ClrType)}', which cannot be assigned to '{Display(memberType)}' member '{member.Member.Name}'";
+                return false;
+            }
+
+            ValueHandlerMapping? valueHandler = null;
+            if (member.HandlerType == null)
+            {
+                if (!IsCompatible(csharpCompilation, sourceType!, memberType))
+                {
+                    error = $"returned column '{column.Name}' has CLR type '{ColumnDisplay(column.ClrType)}', which cannot be assigned to '{Display(memberType)}' member '{member.Member.Name}'";
+                    return false;
+                }
+            }
+            else if (!TryResolveValueHandler(
+                         compilation,
+                         member.HandlerType,
+                         sourceType!,
+                         memberType,
+                         out valueHandler,
+                         out error))
+            {
                 return false;
             }
 
@@ -438,7 +522,7 @@ internal static class ResultMappingFactory
                 column.ClrType,
                 column.Name,
                 member.Member,
-                member.HandlerType));
+                valueHandler));
         }
 
         mapping = new ResultMapping(resultType, ResultMappingKind.Members, memberTargets);
@@ -455,13 +539,37 @@ internal static class ResultMappingFactory
             return HandlerInstance(mapping.ResultHandlerType!) + ".Read(reader)";
         }
 
-        string Read(ResultMappingTarget target) => target.ValueHandlerType == null
-            ? environment.ReadExpression(
+        string Read(ResultMappingTarget target)
+        {
+            var value = environment.ReadExpression(
                 target.ColumnType,
                 target.ColumnOrdinal,
-                context + "." + target.Target?.Name)
-            : HandlerInstance(target.ValueHandlerType) + ".Read(reader, " +
-                target.ColumnOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
+                context + "." + target.Target?.Name);
+            if (target.ValueHandler == null)
+            {
+                return value;
+            }
+
+            var handler = HandlerInstance(target.ValueHandler.HandlerType);
+            switch (target.ValueHandler.Kind)
+            {
+                case ValueHandlerMappingKind.Reader:
+                    return handler + ".Read(reader, " +
+                        target.ColumnOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture) + ")";
+                case ValueHandlerMappingKind.Converter:
+                    return handler + ".Convert(" + value + ")";
+                case ValueHandlerMappingKind.ArrayElements:
+                    var method = target.ColumnType.EndsWith("?", StringComparison.Ordinal)
+                        ? "ConvertNullable"
+                        : "Convert";
+                    return "global::CobaltumOrm.CobaltumArrayHandler." + method + "<" +
+                        Display(target.ValueHandler.SourceType!) + ", " +
+                        Display(target.ValueHandler.ValueType!) + ", " +
+                        Display(target.ValueHandler.HandlerType) + ">(" + value + ", " + handler + ")";
+                default:
+                    throw new InvalidOperationException("Unknown value handler mapping kind.");
+            }
+        }
 
         if (mapping.Kind == ResultMappingKind.Scalar)
         {
@@ -659,13 +767,161 @@ internal static class ResultMappingFactory
         }
 
         handlerType = handlerAttributes[0].AttributeClass!.TypeArguments[0];
-        return ValidateHandler(
+        return ValidateValueHandlerDeclaration(
             compilation,
             handlerType,
-            "IValueHandler`1",
             targetType,
             out error);
     }
+
+    private static bool ValidateValueHandlerDeclaration(
+        Compilation compilation,
+        ITypeSymbol handlerType,
+        ITypeSymbol targetType,
+        out string? error)
+    {
+        if (!(compilation is CSharpCompilation csharpCompilation))
+        {
+            error = "value handlers require a C# compilation";
+            return false;
+        }
+
+        if (!ValidateConstructibleHandler(compilation, handlerType, out error))
+        {
+            return false;
+        }
+
+        var namedHandler = (INamedTypeSymbol)handlerType;
+        var hasReader = HandlerInterfaces(namedHandler, "IValueHandler`1", 1)
+            .Any(@interface => TypesEqual(@interface.TypeArguments[0], targetType));
+        var hasConverter = HandlerInterfaces(namedHandler, "IValueHandler`2", 2)
+            .Any(@interface => IsCompatible(
+                csharpCompilation,
+                @interface.TypeArguments[1],
+                targetType));
+        var hasElementConverter = targetType is IArrayTypeSymbol targetArray &&
+            HandlerInterfaces(namedHandler, "IValueHandler`2", 2)
+                .Any(@interface => TypesEqual(@interface.TypeArguments[1], targetArray.ElementType));
+        if (hasReader || hasConverter || hasElementConverter)
+        {
+            return true;
+        }
+
+        error = $"handler type '{Display(handlerType)}' must implement 'IValueHandler<{Display(targetType)}>', " +
+            $"'IValueHandler<TSource, {Display(targetType)}>', or a matching array element handler";
+        return false;
+    }
+
+    private static bool TryResolveValueHandler(
+        Compilation compilation,
+        ITypeSymbol handlerType,
+        ITypeSymbol sourceType,
+        ITypeSymbol targetType,
+        out ValueHandlerMapping? mapping,
+        out string? error)
+    {
+        mapping = null;
+        error = null;
+        if (!(compilation is CSharpCompilation csharpCompilation))
+        {
+            error = "value handlers require a C# compilation";
+            return false;
+        }
+
+        if (!ValidateConstructibleHandler(compilation, handlerType, out error))
+        {
+            return false;
+        }
+
+        var namedHandler = (INamedTypeSymbol)handlerType;
+        var matches = new List<ValueHandlerMapping>();
+        foreach (var @interface in HandlerInterfaces(namedHandler, "IValueHandler`1", 1))
+        {
+            if (TypesEqual(@interface.TypeArguments[0], targetType))
+            {
+                matches.Add(new ValueHandlerMapping(handlerType, ValueHandlerMappingKind.Reader));
+            }
+        }
+
+        foreach (var @interface in HandlerInterfaces(namedHandler, "IValueHandler`2", 2))
+        {
+            var handlerSource = @interface.TypeArguments[0];
+            var handlerValue = @interface.TypeArguments[1];
+            if (IsCompatible(csharpCompilation, sourceType, handlerSource) &&
+                IsCompatible(csharpCompilation, handlerValue, targetType))
+            {
+                matches.Add(new ValueHandlerMapping(
+                    handlerType,
+                    ValueHandlerMappingKind.Converter,
+                    handlerSource,
+                    handlerValue));
+            }
+
+            if (sourceType is IArrayTypeSymbol sourceArray &&
+                targetType is IArrayTypeSymbol targetArray &&
+                (!IsNullable(sourceType) || IsNullable(targetType)) &&
+                TypesEqual(handlerSource, sourceArray.ElementType) &&
+                TypesEqual(handlerValue, targetArray.ElementType))
+            {
+                matches.Add(new ValueHandlerMapping(
+                    handlerType,
+                    ValueHandlerMappingKind.ArrayElements,
+                    handlerSource,
+                    handlerValue));
+            }
+        }
+
+        if (matches.Count == 1)
+        {
+            mapping = matches[0];
+            return true;
+        }
+
+        if (matches.Count > 1)
+        {
+            error = $"handler type '{Display(handlerType)}' has more than one conversion applicable to " +
+                $"'{Display(sourceType)}' and '{Display(targetType)}'";
+            return false;
+        }
+
+        error = $"handler type '{Display(handlerType)}' cannot convert returned CLR type " +
+            $"'{Display(sourceType)}' to '{Display(targetType)}'";
+        return false;
+    }
+
+    private static bool TryResolveUncheckedValueHandler(
+        Compilation compilation,
+        ITypeSymbol handlerType,
+        ITypeSymbol targetType,
+        out string? error)
+    {
+        if (!ValidateConstructibleHandler(compilation, handlerType, out error))
+        {
+            return false;
+        }
+
+        var namedHandler = (INamedTypeSymbol)handlerType;
+        if (HandlerInterfaces(namedHandler, "IValueHandler`1", 1)
+            .Any(@interface => TypesEqual(@interface.TypeArguments[0], targetType)))
+        {
+            return true;
+        }
+
+        error = $"conversion handler '{Display(handlerType)}' requires checked SQL so its source CLR type is known";
+        return false;
+    }
+
+    private static IEnumerable<INamedTypeSymbol> HandlerInterfaces(
+        INamedTypeSymbol handlerType,
+        string metadataName,
+        int arity) =>
+        handlerType.AllInterfaces.Where(@interface =>
+            @interface.OriginalDefinition.MetadataName == metadataName &&
+            @interface.ContainingNamespace.ToDisplayString() == "CobaltumOrm" &&
+            @interface.TypeArguments.Length == arity);
+
+    private static bool TypesEqual(ITypeSymbol left, ITypeSymbol right) =>
+        SymbolEqualityComparer.IncludeNullability.Equals(left, right);
 
     private static IEnumerable<AttributeData> TargetAttributes(INamedTypeSymbol resultType, ISymbol target)
     {
@@ -696,6 +952,34 @@ internal static class ResultMappingFactory
         ITypeSymbol valueType,
         out string? error)
     {
+        if (!ValidateConstructibleHandler(compilation, handlerType, out error))
+        {
+            return false;
+        }
+
+        var namedHandler = (INamedTypeSymbol)handlerType;
+        var implementsHandler = namedHandler.AllInterfaces.Any(@interface =>
+            @interface.OriginalDefinition.MetadataName == requiredInterfaceMetadataName &&
+            @interface.ContainingNamespace.ToDisplayString() == "CobaltumOrm" &&
+            @interface.TypeArguments.Length == 1 &&
+            SymbolEqualityComparer.IncludeNullability.Equals(@interface.TypeArguments[0], valueType));
+        if (!implementsHandler)
+        {
+            var interfaceName = requiredInterfaceMetadataName.StartsWith("IValue", StringComparison.Ordinal)
+                ? "IValueHandler<" + Display(valueType) + ">"
+                : "IResultHandler<" + Display(valueType) + ">";
+            error = $"handler type '{Display(handlerType)}' must implement '{interfaceName}'";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool ValidateConstructibleHandler(
+        Compilation compilation,
+        ITypeSymbol handlerType,
+        out string? error)
+    {
         error = null;
         if (!(handlerType is INamedTypeSymbol namedHandler) || namedHandler.IsAbstract ||
             !compilation.IsSymbolAccessibleWithin(handlerType, compilation.Assembly))
@@ -709,20 +993,6 @@ internal static class ResultMappingFactory
                 constructor.DeclaredAccessibility == Accessibility.Public))
         {
             error = $"handler type '{Display(handlerType)}' must have a public parameterless constructor";
-            return false;
-        }
-
-        var implementsHandler = namedHandler.AllInterfaces.Any(@interface =>
-            @interface.OriginalDefinition.MetadataName == requiredInterfaceMetadataName &&
-            @interface.ContainingNamespace.ToDisplayString() == "CobaltumOrm" &&
-            @interface.TypeArguments.Length == 1 &&
-            SymbolEqualityComparer.IncludeNullability.Equals(@interface.TypeArguments[0], valueType));
-        if (!implementsHandler)
-        {
-            var interfaceName = requiredInterfaceMetadataName.StartsWith("IValue", StringComparison.Ordinal)
-                ? "IValueHandler<" + Display(valueType) + ">"
-                : "IResultHandler<" + Display(valueType) + ">";
-            error = $"handler type '{Display(handlerType)}' must implement '{interfaceName}'";
             return false;
         }
 
@@ -758,8 +1028,7 @@ internal static class ResultMappingFactory
             type = nullable.TypeArguments[0];
         }
 
-        if (type.TypeKind == TypeKind.Enum || type is IArrayTypeSymbol array &&
-            array.ElementType.SpecialType == SpecialType.System_Byte)
+        if (type.TypeKind == TypeKind.Enum || type is IArrayTypeSymbol)
         {
             return true;
         }
@@ -808,6 +1077,13 @@ internal static class ResultMappingFactory
     {
         var nullable = analyzerType.EndsWith("?", StringComparison.Ordinal);
         var baseName = nullable ? analyzerType.Substring(0, analyzerType.Length - 1) : analyzerType;
+        var arrayRank = 0;
+        while (baseName.EndsWith("[]", StringComparison.Ordinal))
+        {
+            arrayRank++;
+            baseName = baseName.Substring(0, baseName.Length - 2);
+        }
+
         var metadataName = baseName switch
         {
             "bool" => "System.Boolean",
@@ -824,7 +1100,7 @@ internal static class ResultMappingFactory
             "DateTime" => "System.DateTime",
             "DateTimeOffset" => "System.DateTimeOffset",
             "TimeSpan" => "System.TimeSpan",
-            "byte[]" => "System.Byte",
+            "byte" => "System.Byte",
             _ => "System.Object",
         };
         type = compilation.GetTypeByMetadataName(metadataName);
@@ -833,9 +1109,14 @@ internal static class ResultMappingFactory
             return false;
         }
 
-        if (baseName == "byte[]")
+        while (arrayRank-- > 0)
         {
-            type = compilation.CreateArrayTypeSymbol(type).WithNullableAnnotation(nullable
+            type = compilation.CreateArrayTypeSymbol(type);
+        }
+
+        if (type is IArrayTypeSymbol)
+        {
+            type = type.WithNullableAnnotation(nullable
                 ? NullableAnnotation.Annotated
                 : NullableAnnotation.NotAnnotated);
             return true;

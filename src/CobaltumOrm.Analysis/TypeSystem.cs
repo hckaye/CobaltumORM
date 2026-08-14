@@ -27,22 +27,58 @@ public enum SqlValueKind
 
 internal readonly struct TypeInfo
 {
-    internal TypeInfo(SqlValueKind kind, bool nullable, bool isNullLiteral = false, string? parameterName = null)
+    internal TypeInfo(
+        SqlValueKind kind,
+        bool nullable,
+        bool isNullLiteral = false,
+        string? parameterName = null,
+        bool isArray = false)
+        : this(new SqlTypeShape(kind, isArray), nullable, isNullLiteral, parameterName)
     {
-        Kind = kind;
+    }
+
+    internal TypeInfo(
+        SqlTypeShape type,
+        bool nullable,
+        bool isNullLiteral = false,
+        string? parameterName = null)
+    {
+        Type = type;
         Nullable = nullable;
         IsNullLiteral = isNullLiteral;
         ParameterName = parameterName;
     }
 
-    internal SqlValueKind Kind { get; }
+    internal SqlTypeShape Type { get; }
+    internal SqlValueKind Kind => Type.Kind;
+    internal bool IsArray => Type.IsArray;
     internal bool Nullable { get; }
     internal bool IsNullLiteral { get; }
     internal string? ParameterName { get; }
     internal bool IsKnown => Kind != SqlValueKind.Unknown && Kind != SqlValueKind.Error;
     internal bool IsError => Kind == SqlValueKind.Error;
 
-    internal TypeInfo WithNullable(bool nullable) => new TypeInfo(Kind, nullable, IsNullLiteral, ParameterName);
+    internal TypeInfo WithNullable(bool nullable) => new TypeInfo(Type, nullable, IsNullLiteral, ParameterName);
+}
+
+internal readonly struct SqlTypeShape : IEquatable<SqlTypeShape>
+{
+    internal SqlTypeShape(SqlValueKind kind, bool isArray = false)
+    {
+        Kind = kind;
+        IsArray = isArray;
+    }
+
+    internal SqlValueKind Kind { get; }
+    internal bool IsArray { get; }
+    internal bool IsKnown => Kind != SqlValueKind.Unknown && Kind != SqlValueKind.Error;
+
+    internal SqlTypeShape ToArray() => new SqlTypeShape(Kind, true);
+    internal SqlTypeShape ElementType => new SqlTypeShape(Kind);
+
+    public bool Equals(SqlTypeShape other) => Kind == other.Kind && IsArray == other.IsArray;
+    public override bool Equals(object? obj) => obj is SqlTypeShape other && Equals(other);
+    public override int GetHashCode() => ((int)Kind * 397) ^ (IsArray ? 1 : 0);
 }
 
 internal static class SqlTypeMapper
@@ -70,6 +106,17 @@ internal static class SqlTypeMapper
             case SqlValueKind.Interval: name = "TimeSpan"; break;
             case SqlValueKind.Bytes: name = "byte[]"; break;
             default: name = "object"; break;
+        }
+
+        return nullable ? name + "?" : name;
+    }
+
+    internal static string ToClrName(SqlTypeShape type, bool nullable)
+    {
+        var name = ToClrName(type.Kind, false);
+        if (type.IsArray)
+        {
+            name += "[]";
         }
 
         return nullable ? name + "?" : name;

@@ -108,7 +108,7 @@ internal sealed class PostgreSqlMigrationApplier
         var valid = true;
         foreach (var definition in statement.Columns)
         {
-            if (!QueryDialectProfiles.PostgreSql.Types.TryMap(definition.SqlType, out _))
+            if (!QueryDialectProfiles.PostgreSql.Types.TryMapType(definition.SqlType, out _))
             {
                 Report("DDL205", $"Unsupported PostgreSQL type '{definition.SqlType}'.", definition.Span);
                 valid = false;
@@ -271,7 +271,7 @@ internal sealed class PostgreSqlMigrationApplier
 
     private void ApplyAdd(int tableIndex, Table table, AddColumnAction action, List<Table> tables)
     {
-        if (!QueryDialectProfiles.PostgreSql.Types.TryMap(action.Column.SqlType, out _))
+        if (!QueryDialectProfiles.PostgreSql.Types.TryMapType(action.Column.SqlType, out _))
         {
             Report("DDL205", $"Unsupported PostgreSQL type '{action.Column.SqlType}'.", action.Column.Span);
             return;
@@ -361,7 +361,7 @@ internal sealed class PostgreSqlMigrationApplier
 
     private void ApplyAlterType(int tableIndex, Table table, AlterColumnTypeAction action, List<Table> tables)
     {
-        if (!QueryDialectProfiles.PostgreSql.Types.TryMap(action.SqlType, out _))
+        if (!QueryDialectProfiles.PostgreSql.Types.TryMapType(action.SqlType, out _))
         {
             Report("DDL205", $"Unsupported PostgreSQL type '{action.SqlType}'.", action.Span);
             return;

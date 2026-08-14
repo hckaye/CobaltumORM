@@ -928,7 +928,10 @@ internal static class MigrationSyntaxReader
         Action<Diagnostic> report,
         string sqlType)
     {
-        if (!dialect.TypeMapper.TryMap(sqlType, out _))
+        var supported = dialect.TypeMapper is CobaltumOrm.Analysis.PostgreSqlTypeMapper postgreSql
+            ? postgreSql.TryMapType(sqlType, out _)
+            : dialect.TypeMapper.TryMap(sqlType, out _);
+        if (!supported)
             return Invalid(call, report, $"Database provider '{dialect.Name}' does not recognize migration type '{sqlType}'.");
         column.SqlType = sqlType;
         column.LogicalType = "custom";

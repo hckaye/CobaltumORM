@@ -56,8 +56,9 @@ SQL type, nullability, primary-key flag, and opaque default expression.
 | `timestamptz` | `DateTimeOffset` |
 | `interval` | `TimeSpan` |
 | `bytea` | `byte[]` |
+| `T[]` for a supported element type | corresponding CLR `T[]` |
 
-Parameters mapped from `json` or `jsonb` retain the PostgreSQL type name. Nullable
+Parameters mapped from `json`, `jsonb`, or a PostgreSQL array retain the PostgreSQL type name. Nullable
 columns use `T?`, including `string?`, with nullable reference types enabled in the
 consumer. `time with time zone` and `timetz` are unsupported because `TimeOnly` would
 discard their offset; the analyzer reports a diagnostic for those types.
@@ -73,7 +74,8 @@ discard their offset; the analyzer reports a diagnostic for those types.
   `IS [NOT] NULL`, `IS [NOT] TRUE/FALSE/UNKNOWN`, `IS [NOT] DISTINCT FROM`, `LIKE`,
   `ILIKE`, regular-expression matching, `IN`, `BETWEEN`, JSON access, containment,
   overlap, `CASE`, `CAST`, PostgreSQL `::` casts, date/time/interval literals, current
-  date and timestamp values, and common temporal arithmetic.
+  date and timestamp values, `ARRAY[...]` constructors, array subscripts, `ANY` / `ALL`, and
+  common temporal arithmetic.
 - Functions: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`, `LOWER`, `UPPER`, `LENGTH`, `ABS`,
   `COALESCE`, `NULLIF`, `GREATEST`, `LEAST`, `ROUND`, `CEIL`, `CEILING`, `FLOOR`,
   `SUBSTRING`, `TRIM`, `BTRIM`, `LTRIM`, `RTRIM`, `NOW`, `TRANSACTION_TIMESTAMP`,
@@ -84,7 +86,8 @@ discard their offset; the analyzer reports a diagnostic for those types.
   and `LAST_VALUE`. Inline and named window specifications support inheritance,
   `PARTITION BY`, and `ORDER BY`. Frame-clause text is accepted but is not semantically
   validated. Aggregate `DISTINCT` and `FILTER` are supported.
-- `FROM` with table aliases, derived tables, and lateral derived tables. Joins include
+- `FROM` with table aliases, derived tables, lateral derived tables, `unnest`, and
+  `generate_subscripts`. Joins include
   inner, left, right, full, cross, natural, `ON`, and `USING` forms.
 - `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY` with `NULLS FIRST` or `NULLS LAST`,
   `LIMIT`, `OFFSET`, `FETCH FIRST/NEXT`, and PostgreSQL row-locking clauses.
@@ -106,8 +109,9 @@ discard their offset; the analyzer reports a diagnostic for those types.
   schema. The analyzer validates assignment compatibility, boolean conditions, duplicate
   targets, row widths, source query widths, and parameter types.
 
-The parser does not support `MERGE`, table functions in `FROM`, `GROUPING SETS`, `CUBE`,
-`ROLLUP`, array constructors, or user-defined function result types.
+The parser does not support `MERGE`, table functions in `FROM` other than `unnest` and
+`generate_subscripts`, `GROUPING SETS`, `CUBE`, `ROLLUP`, multidimensional array types
+and constructors, array slices, or user-defined function result types.
 
 ## Inference rules
 
@@ -202,9 +206,10 @@ The binder covers the supported SELECT syntax. This includes CTE and subquery sc
 wildcard expansion, quoted and unquoted identifier rules, joins and propagated
 nullability, set-operation compatibility, clause-level boolean checks, numeric widening,
 SQL three-valued-logic nullability, CASE and casts, the listed functions and aggregate
-rules, aggregate placement, nested-aggregate validation, GROUP BY compatibility checks,
-window expressions, and contextual parameter inference with conflict detection. Results
-can retain inferred columns and parameters alongside diagnostics.
+rules, array expressions and table functions, aggregate placement, nested-aggregate
+validation, GROUP BY compatibility checks, window expressions, and contextual parameter
+inference with conflict detection. Results can retain inferred columns and parameters
+alongside diagnostics.
 
 The same lexer, parser, and binder validate the supported `INSERT`, `UPDATE`, and
 `DELETE` forms. Data modification is checked for syntax, schema, table, and column
