@@ -26,6 +26,12 @@
     </MSBuild>
 
     <ItemGroup>
+      <_CobaltumOrmGeneratePackageReference Include="@(PackageReference)"
+                                           Condition="'%(PackageReference.Identity)' == 'CobaltumOrm' or $([System.String]::Copy('%(PackageReference.Identity)').ToLowerInvariant().StartsWith('cobaltumorm.'))" />
+      <_CobaltumOrmGenerateCentralPackageVersion Include="@(PackageVersion)"
+                                                 Condition="'%(PackageVersion.Identity)' == 'CobaltumOrm' or $([System.String]::Copy('%(PackageVersion.Identity)').ToLowerInvariant().StartsWith('cobaltumorm.'))" />
+      <_CobaltumOrmGenerateSourceGenerator Include="@(Analyzer)"
+                                             Condition="'%(Analyzer.Filename)' == 'CobaltumOrm.SourceGenerator'" />
       <_CobaltumOrmGenerateMigrationSource Include="@(_CobaltumOrmGenerateMigrationInput)"
                                            Condition="'%(CobaltumOrmInputKind)' == 'CSharp' and Exists('%(FullPath)')" />
       <_CobaltumOrmGenerateMigrationSql Include="@(_CobaltumOrmGenerateMigrationInput)"
@@ -51,10 +57,19 @@
       <_CobaltumOrmGenerationLine Include="generatednamespace=$(CobaltumOrmGeneratedNamespace)" />
       <_CobaltumOrmGenerationLine Include="analysiscache=$(CobaltumOrmAnalysisCache)" />
       <_CobaltumOrmGenerationLine Include="analysiscachedirectory=$(_CobaltumOrmAnalysisCacheDirectory)" />
+      <_CobaltumOrmGenerationLine Include="compilertaskassembly=$(CobaltumOrmCompilerTaskAssembly)" />
+      <_CobaltumOrmGenerationLine Include="compiletimequeries=$(CobaltumOrmCompileTimeQueries)" />
       <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateCompile->'compile=%(FullPath)')" />
       <_CobaltumOrmGenerationLine Include="@(ReferencePath->'reference=%(FullPath)')" />
       <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateAdditionalFile->'additionalfile=%(FullPath)')" />
       <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateMigrationSource->'migrationsource=%(FullPath)')" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGeneratePackageReference->'cobaltumormpackagereference=%(Identity)|%(VersionOverride)|%(Version)')" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateCentralPackageVersion->'cobaltumormcentralpackageversion=%(Identity)|%(Version)')" />
+      <_CobaltumOrmGenerationLine Include="@(CobaltumOrmMigrationProjectReference->'migrationprojectreference=%(FullPath)')" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateSourceGenerator->'sourcegenerator=%(FullPath)')" />
+      <_CobaltumOrmGenerationLine Include="@(CompilerVisibleProperty->'compilervisibleproperty=%(Identity)')" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateMigrationSource->'migrationinput=%(FullPath)')" />
+      <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateMigrationSql->'migrationinput=%(FullPath)')" />
     </ItemGroup>
 
     <WriteLinesToFile File="$(CobaltumOrmGenerationInputsFile)"

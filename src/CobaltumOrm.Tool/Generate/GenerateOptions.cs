@@ -13,13 +13,9 @@ internal enum GenerateOutputMode
     Library,
 }
 
-internal sealed class GenerateOptions
+internal sealed class GenerateOptions : ProjectEvaluationOptions
 {
     public string? Project { get; set; }
-
-    public string Configuration { get; set; } = "Debug";
-
-    public string? Framework { get; set; }
 
     public string? Provider { get; set; }
 
@@ -32,10 +28,6 @@ internal sealed class GenerateOptions
     public string? LibraryProject { get; set; }
 
     public string? LibraryName { get; set; }
-
-    public bool NoRestore { get; set; }
-
-    public bool Verbose { get; set; }
 
     public static GenerateOptions Parse(string[] args)
     {
@@ -114,7 +106,7 @@ internal sealed class GenerateOptions
             throw new ToolUsageException("--configuration requires a non-empty value.");
         }
 
-        if (GeneratedNamespace is not null && !IsValidNamespace(GeneratedNamespace))
+        if (GeneratedNamespace is not null && !CSharpNameValidator.IsValidNamespace(GeneratedNamespace))
         {
             throw new ToolUsageException(
                 $"--generated-namespace '{GeneratedNamespace}' is not a valid C# namespace.");
@@ -178,29 +170,6 @@ internal sealed class GenerateOptions
         }
 
         return args[index];
-    }
-
-    private static bool IsValidNamespace(string value)
-    {
-        if (value.Length == 0)
-        {
-            return false;
-        }
-
-        foreach (var part in value.Split('.'))
-        {
-            if (part.Length == 0 || (!char.IsLetter(part[0]) && part[0] != '_'))
-            {
-                return false;
-            }
-
-            if (part.Any(character => !char.IsLetterOrDigit(character) && character != '_'))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static bool IsValidFileStem(string value) =>

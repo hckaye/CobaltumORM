@@ -48,6 +48,32 @@ internal sealed class ToolApplication
                     .ConfigureAwait(false);
             }
 
+            if (string.Equals(args[0], "inspect", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                return await new InspectCommand(_output, _projectEvaluator, _currentDirectory)
+                    .RunAsync(ProjectInspectionOptions.Parse(args, "inspect"), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (string.Equals(args[0], "doctor", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                return await new DoctorCommand(_output, _projectEvaluator, _currentDirectory)
+                    .RunAsync(ProjectInspectionOptions.Parse(args, "doctor"), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             if (string.Equals(args[0], "add", StringComparison.OrdinalIgnoreCase))
             {
                 if (args.Length > 1 && IsHelp(args[1]))
@@ -450,6 +476,8 @@ internal sealed class ToolApplication
         writer.WriteLine();
         writer.WriteLine("Usage:");
         writer.WriteLine("  cobaltum generate [--project <path>] [--output-mode <mode>] [--output <dir>]");
+        writer.WriteLine("  cobaltum inspect --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
+        writer.WriteLine("  cobaltum doctor --project <path> [--framework <tfm>] [--configuration <name>] [--no-restore] [--format text|json]");
         writer.WriteLine("  cobaltum add --project <path> --migration-project <path> [options]");
         writer.WriteLine("  cobaltum migrations init <project-name> [--provider <name>] [--output <path>] [--framework <tfm>]");
         writer.WriteLine("  cobaltum migrations add <name> [--version <number>] [--project <path>]");
@@ -497,6 +525,13 @@ internal sealed class ToolApplication
         writer.WriteLine("      --provider <name>      Database provider when it is not set in the project");
         writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
         writer.WriteLine("      --verbose              Print the MSBuild command and its output");
+        writer.WriteLine();
+        writer.WriteLine("Inspect and doctor options:");
+        writer.WriteLine("  -p, --project <path>       Application or query .csproj file, or its directory");
+        writer.WriteLine("  -c, --configuration <name> Build configuration (default: Debug)");
+        writer.WriteLine("  -f, --framework <tfm>      Target framework when the project targets more than one");
+        writer.WriteLine("      --no-restore           Do not restore before evaluating the project");
+        writer.WriteLine("      --format <format>      text (default) or json");
     }
 }
 

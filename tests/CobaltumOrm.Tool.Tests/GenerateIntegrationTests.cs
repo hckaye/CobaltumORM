@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security;
+using System.Text.Json;
 using CobaltumOrm.Tool;
 using Xunit;
 
@@ -184,6 +185,96 @@ public sealed class GenerateIntegrationTests
         Assert.Contains("UsersRow", models, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task InspectUsesRealMsBuildEvaluationWithoutPublishingGeneratedFiles()
+    {
+        using var fixture = new BuildFixture();
+        fixture.WriteDefaultSources();
+        var build = fixture.RunDotnet("build", fixture.ProjectPath, "-c", "Release", "--nologo");
+        Assert.True(build.ExitCode == 0, string.Join("\n", build.Output));
+        var projectBefore = File.ReadAllText(fixture.ProjectPath);
+        var consumerPath = Path.Combine(fixture.Root, "Consumer.cs");
+        var consumerBefore = File.ReadAllText(consumerPath);
+
+        var inspect = await fixture.InspectAsync("inspect", "--format", "json", "--no-restore");
+
+        Assert.Equal(0, inspect.ExitCode);
+        Assert.Equal(string.Empty, inspect.Error);
+        Assert.Equal(projectBefore, File.ReadAllText(fixture.ProjectPath));
+        Assert.Equal(consumerBefore, File.ReadAllText(consumerPath));
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "obj", "Release", "net10.0", "CobaltumOrmInspection")));
+        using var document = JsonDocument.Parse(inspect.Output);
+        var root = document.RootElement;
+        Assert.Equal(1, root.GetProperty("formatVersion").GetInt32());
+        Assert.Equal(fixture.ProjectPath, root.GetProperty("projectPath").GetString());
+        Assert.Equal("net10.0", root.GetProperty("targetFramework").GetString());
+        Assert.Equal("Release", root.GetProperty("configuration").GetString());
+        Assert.True(root.GetProperty("analysisSucceeded").GetBoolean());
+        Assert.NotEmpty(root.GetProperty("sourceGeneratorPaths").EnumerateArray());
+        Assert.Contains(
+            root.GetProperty("generatedArtifacts").EnumerateArray(),
+            artifact => artifact.GetProperty("fileName").GetString() == "CobaltumOrm.SqlSchema.g.cs");
+    }
+
+    [Fact]
+    public async Task DoctorReportsRealMigrationProjectReferencesAndInputs()
+    {
+        using var fixture = new BuildFixture();
+        fixture.WriteDefaultSources(includeLocalMigration: false);
+        fixture.WriteMigrationProject(MigrationSource);
+        var build = fixture.RunDotnet("build", fixture.ProjectPath, "-c", "Release", "--nologo");
+        Assert.True(build.ExitCode == 0, string.Join("\n", build.Output));
+
+        var inspect = await fixture.InspectAsync("inspect", "--format", "json", "--no-restore");
+        var doctor = await fixture.InspectAsync("doctor", "--format", "json", "--no-restore");
+
+        Assert.Equal(0, inspect.ExitCode);
+        using (var document = JsonDocument.Parse(inspect.Output))
+        {
+            var root = document.RootElement;
+            Assert.Equal(
+                new[] { Path.Combine(fixture.Root, "Migrations.Project", "Migrations.Project.csproj") },
+                root.GetProperty("migrationProjectReferencePaths").EnumerateArray().Select(item => item.GetString()));
+            Assert.Contains(
+                root.GetProperty("migrationSourcePaths").EnumerateArray().Select(item => item.GetString()),
+                path => path!.EndsWith("Migrations/CreateUsers.cs", StringComparison.Ordinal));
+            Assert.Contains(
+                root.GetProperty("migrationInputPaths").EnumerateArray().Select(item => item.GetString()),
+                path => path!.EndsWith("Migrations/CreateUsers.cs", StringComparison.Ordinal));
+        }
+
+        Assert.Equal(0, doctor.ExitCode);
+        using var doctorDocument = JsonDocument.Parse(doctor.Output);
+        Assert.Equal("ok", doctorDocument.RootElement.GetProperty("status").GetString());
+        Assert.Equal(
+            new[]
+            {
+                "target-framework", "cobaltumorm-wiring", "database-provider", "generated-namespace",
+                "migration-inputs", "generation-diagnostics",
+            },
+            doctorDocument.RootElement.GetProperty("checks").EnumerateArray()
+                .Select(check => check.GetProperty("id").GetString()));
+    }
+
+    [Fact]
+    public async Task InspectRequiresFrameworkForARealMultiTargetProject()
+    {
+        using var fixture = new BuildFixture();
+        fixture.WriteMultiTargetProject();
+
+        var ambiguous = await fixture.InspectAsync("inspect", "--format", "json");
+        var selected = await fixture.InspectAsync(
+            "inspect", "--framework", "net10.0", "--format", "json", "--no-restore");
+
+        Assert.Equal(1, ambiguous.ExitCode);
+        Assert.Equal(string.Empty, ambiguous.Output);
+        Assert.Contains("--framework", ambiguous.Error, StringComparison.Ordinal);
+        Assert.Equal(0, selected.ExitCode);
+        Assert.Equal(string.Empty, selected.Error);
+        using var document = JsonDocument.Parse(selected.Output);
+        Assert.Equal("net10.0", document.RootElement.GetProperty("targetFramework").GetString());
+    }
+
     private static Dictionary<string, string> ReadGeneratedFiles(string directory) =>
         Directory
             .EnumerateFiles(directory, "*.cs", SearchOption.TopDirectoryOnly)
@@ -247,6 +338,17 @@ public sealed class GenerateIntegrationTests
             File.WriteAllText(ProjectPath, ProjectText(migrationProjectReference: false));
         }
 
+        public void WriteMultiTargetProject()
+        {
+            File.WriteAllText(ProjectPath, """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+                  </PropertyGroup>
+                </Project>
+                """);
+        }
+
         public void WriteMigrationProject(string migrationSource)
         {
             var directory = Path.Combine(Root, "Migrations.Project");
@@ -299,6 +401,17 @@ public sealed class GenerateIntegrationTests
             using var error = new StringWriter();
             var application = new ToolApplication(output, error, new DotNetProcessRunner(), Root);
             var args = new List<string> { "generate", "--project", ProjectPath, "--configuration", "Release" };
+            args.AddRange(arguments);
+            var exitCode = await application.RunAsync(args.ToArray(), CancellationToken.None);
+            return new RunResult(exitCode, output.ToString(), error.ToString());
+        }
+
+        public async Task<RunResult> InspectAsync(string command, params string[] arguments)
+        {
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            var application = new ToolApplication(output, error, new DotNetProcessRunner(), Root);
+            var args = new List<string> { command, "--project", ProjectPath, "--configuration", "Release" };
             args.AddRange(arguments);
             var exitCode = await application.RunAsync(args.ToArray(), CancellationToken.None);
             return new RunResult(exitCode, output.ToString(), error.ToString());
@@ -361,6 +474,7 @@ public sealed class GenerateIntegrationTests
                   <PropertyGroup>
                     <TargetFramework>net10.0</TargetFramework>
                     <Nullable>enable</Nullable>
+                    <CobaltumOrmGeneratedNamespace>Fixture.Generated</CobaltumOrmGeneratedNamespace>
                     <CobaltumOrmCompilerTaskAssembly>{Escape(CompilerTaskAssembly())}</CobaltumOrmCompilerTaskAssembly>
                     <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
                     <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
@@ -372,6 +486,7 @@ public sealed class GenerateIntegrationTests
                                       OutputItemType="Analyzer"
                                       ReferenceOutputAssembly="false" />
                     <AdditionalFiles Include="Migrations/V*__*.sql" />
+                    <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
                 {migrationReference}  </ItemGroup>
                   <Import Project="{Escape(SourceGeneratorTargets())}" />
                   <Import Project="$(CobaltumOrmGeneratedProps)" Condition="'$(CobaltumOrmGeneratedProps)' != ''" />
