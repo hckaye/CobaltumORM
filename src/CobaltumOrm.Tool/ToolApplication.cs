@@ -48,6 +48,18 @@ internal sealed class ToolApplication
                     .ConfigureAwait(false);
             }
 
+            if (string.Equals(args[0], "add", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length > 1 && IsHelp(args[1]))
+                {
+                    WriteHelp(_output);
+                    return 0;
+                }
+
+                new AddCommand(_output, _currentDirectory).Run(AddOptions.Parse(args));
+                return 0;
+            }
+
             if (!string.Equals(args[0], "migrations", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(args[0], "migration", StringComparison.OrdinalIgnoreCase))
             {
@@ -438,6 +450,7 @@ internal sealed class ToolApplication
         writer.WriteLine();
         writer.WriteLine("Usage:");
         writer.WriteLine("  cobaltum generate [--project <path>] [--output-mode <mode>] [--output <dir>]");
+        writer.WriteLine("  cobaltum add --project <path> --migration-project <path> [options]");
         writer.WriteLine("  cobaltum migrations init <project-name> [--provider <name>] [--output <path>] [--framework <tfm>]");
         writer.WriteLine("  cobaltum migrations add <name> [--version <number>] [--project <path>]");
         writer.WriteLine("  cobaltum migrations list [--project <path>]");
@@ -460,6 +473,17 @@ internal sealed class ToolApplication
         writer.WriteLine("      --dry-run              Show migration files, SQL, and final schema without changes");
         writer.WriteLine("      --write-schema         Write final schema JSON after migrations up");
         writer.WriteLine("      --version <number>     Version for a new migration");
+        writer.WriteLine();
+        writer.WriteLine("Add options:");
+        writer.WriteLine("  -p, --project <path>       Existing application or query .csproj");
+        writer.WriteLine("  -m, --migration-project <path>");
+        writer.WriteLine("                             Existing migration .csproj");
+        writer.WriteLine("      --generated-namespace <ns>");
+        writer.WriteLine("                             Namespace for generated code (default: migration RootNamespace)");
+        writer.WriteLine("      --provider <name>      Provider for a newly created or manually configured migration project");
+        writer.WriteLine("  -f, --framework <tfm>      Framework for a newly created migration project");
+        writer.WriteLine("      --create-migration-project");
+        writer.WriteLine("                             Create the missing migration project without replacing files");
         writer.WriteLine();
         writer.WriteLine("Generate options:");
         writer.WriteLine("      --output-mode <mode>   intermediate (default), directory, or library");

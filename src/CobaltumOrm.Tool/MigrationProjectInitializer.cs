@@ -1,4 +1,6 @@
 using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace CobaltumOrm.Tool;
 
@@ -50,6 +52,17 @@ internal sealed class MigrationProjectInitializer
         string? requestedFramework,
         string? requestedProvider = null)
     {
+        var plan = Plan(projectName, outputDirectory, requestedFramework, requestedProvider);
+        plan.Write(_output);
+    }
+
+    public MigrationProjectPlan Plan(
+        string projectName,
+        string outputDirectory,
+        string? requestedFramework,
+        string? requestedProvider,
+        MigrationProjectPackageConfiguration? packageConfiguration = null)
+    {
         ValidateProjectName(projectName);
         var provider = MigrationProviders.Normalize(requestedProvider);
         var framework = string.IsNullOrWhiteSpace(requestedFramework)
@@ -71,28 +84,18 @@ internal sealed class MigrationProjectInitializer
                 projectName,
                 framework,
                 provider,
-                userSecretsId));
+                userSecretsId,
+                file.ResourceName.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)
+                    ? packageConfiguration
+                    : null));
 
-        try
-        {
-            Directory.CreateDirectory(outputDirectory);
-            foreach (var pair in contents)
-            {
-                var relativePath = pair.Key.OutputPath(projectName);
-                var outputPath = Path.Combine(outputDirectory, relativePath);
-                Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-                using var stream = new FileStream(outputPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-                writer.Write(pair.Value);
-            }
-        }
-        catch (IOException exception)
-        {
-            throw new ToolUsageException(
-                $"Could not create migration project in '{outputDirectory}': {exception.Message}");
-        }
-
-        _output.WriteLine($"Created migration project {Path.Combine(outputDirectory, ProjectFileName(projectName))}");
+        return new MigrationProjectPlan(
+            outputDirectory,
+            Path.Combine(outputDirectory, ProjectFileName(projectName)),
+            contents.Select(pair => new MigrationProjectFilePlan(
+                Path.Combine(outputDirectory, pair.Key.OutputPath(projectName)),
+                pair.Value))
+            .ToArray());
     }
 
     private static void ValidateProjectName(string projectName)
@@ -156,11 +159,92 @@ internal sealed class MigrationProjectInitializer
         string projectName,
         string framework,
         string provider,
-        string userSecretsId) =>
-        SelectProvider(content, provider)
+        string userSecretsId,
+        MigrationProjectPackageConfiguration? packageConfiguration)
+    {
+        var transformed = SelectProvider(content, provider)
             .Replace(SourceName, projectName, StringComparison.Ordinal)
             .Replace(DefaultFramework, framework, StringComparison.Ordinal)
             .Replace(TemplateUserSecretsId, userSecretsId, StringComparison.Ordinal);
+
+        return packageConfiguration is null
+            ? transformed
+            : ConfigurePackageReferences(transformed, packageConfiguration);
+    }
+
+    private static string ConfigurePackageReferences(
+        string content,
+        MigrationProjectPackageConfiguration configuration)
+    {
+        XDocument document;
+        try
+        {
+            document = XDocument.Parse(content, LoadOptions.PreserveWhitespace);
+        }
+        catch (XmlException exception)
+        {
+            throw new ToolUsageException($"Could not configure the migration project template: {exception.Message}");
+        }
+
+        var requirements = configuration.Packages
+            .GroupBy(package => package.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.OrdinalIgnoreCase);
+        foreach (var reference in document.Descendants()
+            .Where(element => element.Name.LocalName == "PackageReference"))
+        {
+            var packageId = reference.Attribute("Include")?.Value ?? reference.Attribute("Update")?.Value;
+            if (packageId is null || !requirements.TryGetValue(packageId, out var requirement))
+            {
+                throw new ToolUsageException(
+                    $"The migration project template contains an unsupported PackageReference '{packageId ?? ""}'.");
+            }
+
+            RemoveMetadata(reference, "VersionOverride");
+            var versionAttribute = reference.Attribute("Version");
+            foreach (var child in reference.Elements()
+                .Where(element => element.Name.LocalName == "Version")
+                .ToArray())
+            {
+                child.Remove();
+            }
+
+            if (configuration.UseCentralPackageManagement)
+            {
+                versionAttribute?.Remove();
+            }
+
+            if (!configuration.UseCentralPackageManagement)
+            {
+                if (requirement.Version is null)
+                {
+                    throw new ToolUsageException(
+                        $"No version was resolved for migration package '{requirement.Id}'.");
+                }
+
+                if (versionAttribute is null)
+                {
+                    reference.Add(new XAttribute("Version", requirement.Version));
+                }
+                else
+                {
+                    versionAttribute.Value = requirement.Version;
+                }
+            }
+        }
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    private static void RemoveMetadata(XElement reference, string name)
+    {
+        reference.Attribute(name)?.Remove();
+        foreach (var child in reference.Elements()
+            .Where(element => element.Name.LocalName == name)
+            .ToArray())
+        {
+            child.Remove();
+        }
+    }
 
     private static string SelectProvider(string content, string provider)
     {
@@ -340,4 +424,53 @@ internal sealed class MigrationProjectInitializer
     }
 
     private sealed record TemplateFile(string ResourceName, Func<string, string> OutputPath);
+}
+
+internal sealed record MigrationProjectPackageConfiguration(
+    bool UseCentralPackageManagement,
+    IReadOnlyList<PackageRequirement> Packages);
+
+internal sealed record MigrationProjectFilePlan(string Path, string Content);
+
+internal sealed class MigrationProjectPlan
+{
+    public MigrationProjectPlan(
+        string outputDirectory,
+        string projectPath,
+        IReadOnlyList<MigrationProjectFilePlan> files)
+    {
+        OutputDirectory = outputDirectory;
+        ProjectPath = projectPath;
+        Files = files;
+    }
+
+    public string OutputDirectory { get; }
+
+    public string ProjectPath { get; }
+
+    public IReadOnlyList<MigrationProjectFilePlan> Files { get; }
+
+    public void Write(TextWriter output)
+    {
+        try
+        {
+            Directory.CreateDirectory(OutputDirectory);
+            foreach (var file in Files)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(file.Path)!);
+                using var stream = new FileStream(file.Path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                using var writer = new StreamWriter(
+                    stream,
+                    new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                writer.Write(file.Content);
+            }
+        }
+        catch (IOException exception)
+        {
+            throw new ToolUsageException(
+                $"Could not create migration project in '{OutputDirectory}': {exception.Message}");
+        }
+
+        output.WriteLine($"Created migration project {ProjectPath}");
+    }
 }
