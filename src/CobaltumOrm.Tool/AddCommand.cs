@@ -555,7 +555,7 @@ internal sealed class AddCommand
             ?.InformationalVersion;
         if (string.IsNullOrWhiteSpace(informationalVersion))
         {
-            return "0.0.6";
+            return "1.0.0";
         }
 
         return NormalizeInformationalVersion(informationalVersion);
