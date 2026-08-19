@@ -221,6 +221,31 @@ public static Task<IReadOnlyList<AppUsersRow>> ReadFilteredAsync(
 }
 ```
 
+## AND と OR で条件を組み合わせる
+
+`And`、`Or`、および `&&`、`||` 演算子で条件を 2 つずつ組み合わせます。組み合わせた条件は SQL で括弧に入ります。
+`&&` と `||` は両辺を必ず評価します。どちらも 1 つの SQL 条件の一部なので、途中で打ち切りません。
+列の比較には `Equal`、`NotEqual`、`IsNull`、`IsNotNull`、`Like`、`In`、`Between` と 4 種類の大小比較があり、
+大小比較は `<`、`<=`、`>`、`>=` でも書けます。比較する値はすべてデータベースのパラメーターとして渡されます。
+
+<!-- snippet: combined-conditions -->
+```csharp
+public static Task<IReadOnlyList<AppUsersRow>> ReadMatchingAsync(
+    DbConnection connection,
+    string prefix,
+    IReadOnlyList<int> ids,
+    DateTimeOffset createdBefore,
+    CancellationToken cancellationToken = default)
+{
+    var query = Tables.Users.Where(
+        (Tables.Users.DisplayName.Like(prefix + "%") || Tables.Users.DisplayName.IsNull())
+            && Tables.Users.Id.In(ids)
+            && Tables.Users.CreatedAt.LessThan(createdBefore));
+
+    return connection.Query(query, transaction: null).ReadAsync(cancellationToken);
+}
+```
+
 ## SQL を書かずにレコードを保存する
 
 `Tables.<Table>.Insert` は、生成された `record` 1 件から INSERT 文を組み立てます。自動採番の列は文から
@@ -237,7 +262,7 @@ public static async Task<AppUsersRow> AddUserAsync(
     CancellationToken cancellationToken = default)
 {
     var stored = await connection
-        .Query(Tables.Users.InsertReturning(new AppUsersRow(0, email, null, createdAt)))
+        .Query(Tables.Users.InsertReturning(new AppUsersInsertRow(email, null, createdAt)))
         .ReadAsync(cancellationToken);
 
     return stored[0];

@@ -178,19 +178,18 @@ public sealed class CobaltumQueryDefinition<TResult>
                 "This statement does not accept a WHERE clause.");
         }
 
-        var parameterName = predicate.ParameterName(
-            "__cobaltum_where_" + _nextWhereParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var startIndex = _nextWhereParameterIndex;
         var separator = _hasWhereClause ? " AND " : " WHERE ";
         return new CobaltumQueryDefinition<TResult>(
-            Sql + separator + predicate.SqlWithParameter(parameterName),
+            Sql + separator + predicate.BuildSql(startIndex),
             command =>
             {
                 _bind(command);
-                predicate.Bind(command, parameterName);
+                predicate.Bind(command, startIndex);
             },
             _materialize,
             true,
-            _nextWhereParameterIndex + 1,
+            startIndex + predicate.ParameterCount,
             true);
     }
 
@@ -1354,51 +1353,361 @@ public static class CobaltumParameter
     }
 }
 
-/// <summary>A type-safe equality predicate for one generated table record.</summary>
+/// <summary>
+/// A type-safe predicate for one generated table record. A predicate compares one column with
+/// one value, a list of values, or a range; <see cref="And"/>, <see cref="Or"/>, and the
+/// <c>&amp;</c> and <c>|</c> operators combine predicates, keeping each combination parenthesized.
+/// </summary>
 public sealed class CobaltumPredicate<TRecord>
 {
-    private readonly string _quotedName;
-    private readonly object? _value;
-    private readonly bool _isNull;
+    private const string ParameterBaseName = "__cobaltum_where_";
+
+    private enum PredicateKind
+    {
+        Comparison,
+        NullTest,
+        InList,
+        Range,
+        Combination,
+    }
+
+    private static readonly object?[] NoValues = new object?[0];
+
+    private readonly PredicateKind _kind;
+    private readonly string? _quotedName;
+    private readonly string _comparison;
+    private readonly object?[] _values;
     private readonly DbType? _dbType;
     private readonly Action<DbParameter>? _configureParameter;
     private readonly char _parameterPrefix;
+    private readonly CobaltumPredicate<TRecord>? _left;
+    private readonly CobaltumPredicate<TRecord>? _right;
+    private readonly bool _isOr;
 
-    internal CobaltumPredicate(
+    private CobaltumPredicate(
+        PredicateKind kind,
         string quotedName,
-        object? value,
-        DbType? dbType = null,
-        Action<DbParameter>? configureParameter = null,
-        char parameterPrefix = '@')
+        string comparison,
+        object?[] values,
+        DbType? dbType,
+        Action<DbParameter>? configureParameter,
+        char parameterPrefix)
     {
+        _kind = kind;
         _quotedName = quotedName ?? throw new ArgumentNullException(nameof(quotedName));
-        _value = value;
-        _isNull = value is null;
+        _comparison = comparison;
+        _values = values;
         _dbType = dbType;
         _configureParameter = configureParameter;
         _parameterPrefix = parameterPrefix;
     }
 
-    internal string Sql => SqlWithParameter(ParameterName("value"));
-
-    internal string ParameterName(string suffix) => _parameterPrefix + suffix;
-
-    internal string SqlWithParameter(string parameterName)
+    private CobaltumPredicate(
+        CobaltumPredicate<TRecord> left,
+        CobaltumPredicate<TRecord> right,
+        bool isOr)
     {
-        if (_isNull)
-        {
-            return _quotedName + " IS NULL";
-        }
-
-        return _quotedName + " = " + parameterName;
+        _kind = PredicateKind.Combination;
+        _comparison = string.Empty;
+        _values = NoValues;
+        _left = left;
+        _right = right;
+        _isOr = isOr;
+        _parameterPrefix = left._parameterPrefix;
     }
 
-    internal void Bind(DbCommand command) => Bind(command, "value");
+    /// <summary>Combines this predicate and <paramref name="other"/> with AND.</summary>
+    public CobaltumPredicate<TRecord> And(CobaltumPredicate<TRecord> other) =>
+        Combine(this, other, false);
 
-    internal void Bind(DbCommand command, string parameterName)
+    /// <summary>Combines this predicate and <paramref name="other"/> with OR.</summary>
+    public CobaltumPredicate<TRecord> Or(CobaltumPredicate<TRecord> other) =>
+        Combine(this, other, true);
+
+    /// <summary>Returns this predicate when <paramref name="condition"/> is false; otherwise combines with AND.</summary>
+    public CobaltumPredicate<TRecord> AndIf(bool condition, CobaltumPredicate<TRecord> other) =>
+        condition ? And(other) : this;
+
+    /// <summary>
+    /// Returns this predicate when <paramref name="condition"/> is false; otherwise invokes
+    /// the factory and combines its predicate with AND.
+    /// </summary>
+    public CobaltumPredicate<TRecord> AndIf(
+        bool condition,
+        Func<CobaltumPredicate<TRecord>> predicateFactory)
     {
-        if (!_isNull)
+        if (!condition)
         {
+            return this;
+        }
+
+        if (predicateFactory is null)
+        {
+            throw new ArgumentNullException(nameof(predicateFactory));
+        }
+
+        return And(predicateFactory());
+    }
+
+    /// <summary>Returns this predicate when <paramref name="condition"/> is false; otherwise combines with OR.</summary>
+    public CobaltumPredicate<TRecord> OrIf(bool condition, CobaltumPredicate<TRecord> other) =>
+        condition ? Or(other) : this;
+
+    /// <summary>
+    /// Returns this predicate when <paramref name="condition"/> is false; otherwise invokes
+    /// the factory and combines its predicate with OR.
+    /// </summary>
+    public CobaltumPredicate<TRecord> OrIf(
+        bool condition,
+        Func<CobaltumPredicate<TRecord>> predicateFactory)
+    {
+        if (!condition)
+        {
+            return this;
+        }
+
+        if (predicateFactory is null)
+        {
+            throw new ArgumentNullException(nameof(predicateFactory));
+        }
+
+        return Or(predicateFactory());
+    }
+
+    /// <summary>Combines two predicates with AND. <c>&amp;&amp;</c> resolves to this operator.</summary>
+    public static CobaltumPredicate<TRecord> operator &(
+        CobaltumPredicate<TRecord> left,
+        CobaltumPredicate<TRecord> right) =>
+        Combine(left, right, false);
+
+    /// <summary>Combines two predicates with OR. <c>||</c> resolves to this operator.</summary>
+    public static CobaltumPredicate<TRecord> operator |(
+        CobaltumPredicate<TRecord> left,
+        CobaltumPredicate<TRecord> right) =>
+        Combine(left, right, true);
+
+    /// <summary>
+    /// Always false, which makes <c>&amp;&amp;</c> read both sides and combine them with AND.
+    /// A predicate describes SQL rather than a C# truth value, so it is never true on its own.
+    /// </summary>
+    public static bool operator false(CobaltumPredicate<TRecord> predicate) => false;
+
+    /// <summary>
+    /// Always false, which makes <c>||</c> read both sides and combine them with OR.
+    /// A predicate describes SQL rather than a C# truth value, so it is never true on its own.
+    /// </summary>
+    public static bool operator true(CobaltumPredicate<TRecord> predicate) => false;
+
+    internal static CobaltumPredicate<TRecord> Comparison(
+        string quotedName,
+        string comparison,
+        object? value,
+        DbType? dbType,
+        Action<DbParameter>? configureParameter,
+        char parameterPrefix)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(
+                nameof(value),
+                "A null value can only be compared with IsNull or IsNotNull.");
+        }
+
+        return new CobaltumPredicate<TRecord>(
+            PredicateKind.Comparison,
+            quotedName,
+            comparison,
+            new[] { value },
+            dbType,
+            configureParameter,
+            parameterPrefix);
+    }
+
+    internal static CobaltumPredicate<TRecord> NullTest(
+        string quotedName,
+        bool negated,
+        char parameterPrefix) =>
+        new CobaltumPredicate<TRecord>(
+            PredicateKind.NullTest,
+            quotedName,
+            negated ? "IS NOT NULL" : "IS NULL",
+            NoValues,
+            null,
+            null,
+            parameterPrefix);
+
+    internal static CobaltumPredicate<TRecord> InList(
+        string quotedName,
+        bool negated,
+        IEnumerable<object?> values,
+        DbType? dbType,
+        Action<DbParameter>? configureParameter,
+        char parameterPrefix)
+    {
+        if (values is null)
+        {
+            throw new ArgumentNullException(nameof(values));
+        }
+
+        var list = new List<object?>();
+        foreach (var value in values)
+        {
+            if (value is null)
+            {
+                throw new ArgumentException(
+                    "A value list cannot contain null. Combine the predicate with IsNull instead.",
+                    nameof(values));
+            }
+
+            list.Add(value);
+        }
+
+        if (list.Count == 0)
+        {
+            throw new ArgumentException("At least one value is required.", nameof(values));
+        }
+
+        return new CobaltumPredicate<TRecord>(
+            PredicateKind.InList,
+            quotedName,
+            negated ? "NOT IN" : "IN",
+            list.ToArray(),
+            dbType,
+            configureParameter,
+            parameterPrefix);
+    }
+
+    internal static CobaltumPredicate<TRecord> Range(
+        string quotedName,
+        bool negated,
+        object? low,
+        object? high,
+        DbType? dbType,
+        Action<DbParameter>? configureParameter,
+        char parameterPrefix)
+    {
+        if (low is null)
+        {
+            throw new ArgumentNullException(nameof(low));
+        }
+
+        if (high is null)
+        {
+            throw new ArgumentNullException(nameof(high));
+        }
+
+        return new CobaltumPredicate<TRecord>(
+            PredicateKind.Range,
+            quotedName,
+            negated ? "NOT BETWEEN" : "BETWEEN",
+            new[] { low, high },
+            dbType,
+            configureParameter,
+            parameterPrefix);
+    }
+
+    /// <summary>Gets the number of database parameters the predicate binds.</summary>
+    internal int ParameterCount =>
+        _kind == PredicateKind.Combination
+            ? _left!.ParameterCount + _right!.ParameterCount
+            : _values.Length;
+
+    /// <summary>
+    /// Builds the SQL condition, numbering its parameters from <paramref name="startIndex"/>.
+    /// </summary>
+    internal string BuildSql(int startIndex)
+    {
+        var builder = new System.Text.StringBuilder();
+        var index = startIndex;
+        AppendSql(builder, ref index);
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Adds the parameters of the condition, numbered from <paramref name="startIndex"/> in the
+    /// order <see cref="BuildSql"/> writes them.
+    /// </summary>
+    internal void Bind(DbCommand command, int startIndex)
+    {
+        var index = startIndex;
+        AppendParameters(command, ref index);
+    }
+
+    private static CobaltumPredicate<TRecord> Combine(
+        CobaltumPredicate<TRecord> left,
+        CobaltumPredicate<TRecord> right,
+        bool isOr)
+    {
+        if (left is null)
+        {
+            throw new ArgumentNullException(nameof(left));
+        }
+
+        if (right is null)
+        {
+            throw new ArgumentNullException(nameof(right));
+        }
+
+        return new CobaltumPredicate<TRecord>(left, right, isOr);
+    }
+
+    private void AppendSql(System.Text.StringBuilder builder, ref int index)
+    {
+        switch (_kind)
+        {
+            case PredicateKind.Combination:
+                builder.Append('(');
+                _left!.AppendSql(builder, ref index);
+                builder.Append(_isOr ? " OR " : " AND ");
+                _right!.AppendSql(builder, ref index);
+                builder.Append(')');
+                return;
+            case PredicateKind.NullTest:
+                builder.Append(_quotedName).Append(' ').Append(_comparison);
+                return;
+            case PredicateKind.InList:
+                builder.Append(_quotedName).Append(' ').Append(_comparison).Append(" (");
+                for (var position = 0; position < _values.Length; position++)
+                {
+                    if (position != 0)
+                    {
+                        builder.Append(", ");
+                    }
+
+                    builder.Append(ParameterName(index));
+                    index++;
+                }
+
+                builder.Append(')');
+                return;
+            case PredicateKind.Range:
+                builder.Append(_quotedName).Append(' ').Append(_comparison).Append(' ')
+                    .Append(ParameterName(index));
+                index++;
+                builder.Append(" AND ").Append(ParameterName(index));
+                index++;
+                return;
+            default:
+                builder.Append(_quotedName).Append(' ').Append(_comparison).Append(' ')
+                    .Append(ParameterName(index));
+                index++;
+                return;
+        }
+    }
+
+    private void AppendParameters(DbCommand command, ref int index)
+    {
+        if (_kind == PredicateKind.Combination)
+        {
+            _left!.AppendParameters(command, ref index);
+            _right!.AppendParameters(command, ref index);
+            return;
+        }
+
+        foreach (var value in _values)
+        {
+            var parameterName = ParameterName(index);
+            index++;
             if (_dbType.HasValue)
             {
                 if (_configureParameter != null)
@@ -1406,20 +1715,82 @@ public sealed class CobaltumPredicate<TRecord>
                     CobaltumParameter.AddConfigured(
                         command,
                         parameterName,
-                        _value,
+                        value,
                         _dbType.Value,
                         _configureParameter);
                 }
                 else
                 {
-                    CobaltumParameter.Add(command, parameterName, _value, _dbType.Value);
+                    CobaltumParameter.Add(command, parameterName, value, _dbType.Value);
                 }
             }
             else
             {
-                CobaltumParameter.Add(command, parameterName, _value);
+                CobaltumParameter.Add(command, parameterName, value);
             }
         }
+    }
+
+    private string ParameterName(int index) =>
+        _parameterPrefix + ParameterBaseName +
+        index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>Combines generated predicates that are built as a list.</summary>
+public static class CobaltumPredicate
+{
+    /// <summary>Combines every predicate with AND.</summary>
+    public static CobaltumPredicate<TRecord> All<TRecord>(
+        params CobaltumPredicate<TRecord>[] predicates) =>
+        Combine(predicates, false);
+
+    /// <summary>Combines every predicate with AND.</summary>
+    public static CobaltumPredicate<TRecord> All<TRecord>(
+        IEnumerable<CobaltumPredicate<TRecord>> predicates) =>
+        Combine(predicates, false);
+
+    /// <summary>Combines every predicate with OR.</summary>
+    public static CobaltumPredicate<TRecord> Any<TRecord>(
+        params CobaltumPredicate<TRecord>[] predicates) =>
+        Combine(predicates, true);
+
+    /// <summary>Combines every predicate with OR.</summary>
+    public static CobaltumPredicate<TRecord> Any<TRecord>(
+        IEnumerable<CobaltumPredicate<TRecord>> predicates) =>
+        Combine(predicates, true);
+
+    private static CobaltumPredicate<TRecord> Combine<TRecord>(
+        IEnumerable<CobaltumPredicate<TRecord>> predicates,
+        bool isOr)
+    {
+        if (predicates is null)
+        {
+            throw new ArgumentNullException(nameof(predicates));
+        }
+
+        CobaltumPredicate<TRecord>? combined = null;
+        foreach (var predicate in predicates)
+        {
+            if (predicate is null)
+            {
+                throw new ArgumentException(
+                    "A predicate list cannot contain null.",
+                    nameof(predicates));
+            }
+
+            combined = combined is null
+                ? predicate
+                : (isOr ? combined.Or(predicate) : combined.And(predicate));
+        }
+
+        if (combined is null)
+        {
+            throw new ArgumentException(
+                "At least one predicate is required.",
+                nameof(predicates));
+        }
+
+        return combined;
     }
 }
 
@@ -1481,12 +1852,137 @@ public sealed class CobaltumColumn<TRecord, TValue>
         _parameterPrefix = ValidateParameterPrefix(parameterPrefix);
     }
 
-    /// <summary>Builds a parameterized equality predicate.</summary>
-    public CobaltumPredicate<TRecord> Equal(TValue value)
-    {
-        return new CobaltumPredicate<TRecord>(
+    /// <summary>Builds a parameterized equality predicate. A null value compares with IS NULL.</summary>
+    public CobaltumPredicate<TRecord> Equal(TValue value) =>
+        value is null ? IsNull() : Compare("=", value);
+
+    /// <summary>Builds a parameterized inequality predicate. A null value compares with IS NOT NULL.</summary>
+    public CobaltumPredicate<TRecord> NotEqual(TValue value) =>
+        value is null ? IsNotNull() : Compare("<>", value);
+
+    /// <summary>Builds a parameterized <c>&lt;</c> predicate.</summary>
+    public CobaltumPredicate<TRecord> LessThan(TValue value) => Compare("<", value);
+
+    /// <summary>Builds a parameterized <c>&lt;=</c> predicate.</summary>
+    public CobaltumPredicate<TRecord> LessThanOrEqual(TValue value) => Compare("<=", value);
+
+    /// <summary>Builds a parameterized <c>&gt;</c> predicate.</summary>
+    public CobaltumPredicate<TRecord> GreaterThan(TValue value) => Compare(">", value);
+
+    /// <summary>Builds a parameterized <c>&gt;=</c> predicate.</summary>
+    public CobaltumPredicate<TRecord> GreaterThanOrEqual(TValue value) => Compare(">=", value);
+
+    /// <summary>Builds an IS NULL predicate.</summary>
+    public CobaltumPredicate<TRecord> IsNull() =>
+        CobaltumPredicate<TRecord>.NullTest(_quotedName, false, _parameterPrefix);
+
+    /// <summary>Builds an IS NOT NULL predicate.</summary>
+    public CobaltumPredicate<TRecord> IsNotNull() =>
+        CobaltumPredicate<TRecord>.NullTest(_quotedName, true, _parameterPrefix);
+
+    /// <summary>Builds a parameterized LIKE predicate. The pattern is passed as a database parameter.</summary>
+    public CobaltumPredicate<TRecord> Like(TValue pattern) => Compare("LIKE", pattern);
+
+    /// <summary>Builds a parameterized NOT LIKE predicate. The pattern is passed as a database parameter.</summary>
+    public CobaltumPredicate<TRecord> NotLike(TValue pattern) => Compare("NOT LIKE", pattern);
+
+    /// <summary>Builds a parameterized IN predicate. Every value is passed as a database parameter.</summary>
+    public CobaltumPredicate<TRecord> In(params TValue[] values) => InCore(values, false);
+
+    /// <summary>Builds a parameterized IN predicate. Every value is passed as a database parameter.</summary>
+    public CobaltumPredicate<TRecord> In(IEnumerable<TValue> values) => InCore(values, false);
+
+    /// <summary>Builds a parameterized NOT IN predicate. Every value is passed as a database parameter.</summary>
+    public CobaltumPredicate<TRecord> NotIn(params TValue[] values) => InCore(values, true);
+
+    /// <summary>Builds a parameterized NOT IN predicate. Every value is passed as a database parameter.</summary>
+    public CobaltumPredicate<TRecord> NotIn(IEnumerable<TValue> values) => InCore(values, true);
+
+    /// <summary>Builds a parameterized BETWEEN predicate. Both bounds are included.</summary>
+    public CobaltumPredicate<TRecord> Between(TValue low, TValue high) =>
+        CobaltumPredicate<TRecord>.Range(
             _quotedName,
+            false,
+            low,
+            high,
+            _dbType,
+            _configureParameter,
+            _parameterPrefix);
+
+    /// <summary>Builds a parameterized NOT BETWEEN predicate. Both bounds are included.</summary>
+    public CobaltumPredicate<TRecord> NotBetween(TValue low, TValue high) =>
+        CobaltumPredicate<TRecord>.Range(
+            _quotedName,
+            true,
+            low,
+            high,
+            _dbType,
+            _configureParameter,
+            _parameterPrefix);
+
+    /// <summary>Builds a parameterized <c>&lt;</c> predicate.</summary>
+    public static CobaltumPredicate<TRecord> operator <(
+        CobaltumColumn<TRecord, TValue> column,
+        TValue value) =>
+        Compare(column, "<", value);
+
+    /// <summary>Builds a parameterized <c>&gt;</c> predicate.</summary>
+    public static CobaltumPredicate<TRecord> operator >(
+        CobaltumColumn<TRecord, TValue> column,
+        TValue value) =>
+        Compare(column, ">", value);
+
+    /// <summary>Builds a parameterized <c>&lt;=</c> predicate.</summary>
+    public static CobaltumPredicate<TRecord> operator <=(
+        CobaltumColumn<TRecord, TValue> column,
+        TValue value) =>
+        Compare(column, "<=", value);
+
+    /// <summary>Builds a parameterized <c>&gt;=</c> predicate.</summary>
+    public static CobaltumPredicate<TRecord> operator >=(
+        CobaltumColumn<TRecord, TValue> column,
+        TValue value) =>
+        Compare(column, ">=", value);
+
+    private static CobaltumPredicate<TRecord> Compare(
+        CobaltumColumn<TRecord, TValue> column,
+        string comparison,
+        TValue value)
+    {
+        if (column is null)
+        {
+            throw new ArgumentNullException(nameof(column));
+        }
+
+        return column.Compare(comparison, value);
+    }
+
+    private CobaltumPredicate<TRecord> Compare(string comparison, TValue value) =>
+        CobaltumPredicate<TRecord>.Comparison(
+            _quotedName,
+            comparison,
             value,
+            _dbType,
+            _configureParameter,
+            _parameterPrefix);
+
+    private CobaltumPredicate<TRecord> InCore(IEnumerable<TValue> values, bool negated)
+    {
+        if (values is null)
+        {
+            throw new ArgumentNullException(nameof(values));
+        }
+
+        var boxed = new List<object?>();
+        foreach (var value in values)
+        {
+            boxed.Add(value);
+        }
+
+        return CobaltumPredicate<TRecord>.InList(
+            _quotedName,
+            negated,
+            boxed,
             _dbType,
             _configureParameter,
             _parameterPrefix);
@@ -1624,11 +2120,11 @@ public abstract class CobaltumTable<TRecord>
         }
 
         return new CobaltumQueryDefinition<TRecord>(
-            _selectSql + " WHERE " + predicate.Sql,
-            predicate.Bind,
+            _selectSql + " WHERE " + predicate.BuildSql(0),
+            command => predicate.Bind(command, 0),
             _materialize,
             true,
-            1);
+            predicate.ParameterCount);
     }
 
     /// <summary>
@@ -1648,9 +2144,8 @@ public abstract class CobaltumTable<TRecord>
                 "This table entry was created without a DELETE statement.");
         }
 
-        var parameterName = predicate.ParameterName("__cobaltum_where_0");
         return new CobaltumCommandDefinition(
-            _deleteSql + " WHERE " + predicate.SqlWithParameter(parameterName),
-            command => predicate.Bind(command, parameterName));
+            _deleteSql + " WHERE " + predicate.BuildSql(0),
+            command => predicate.Bind(command, 0));
     }
 }

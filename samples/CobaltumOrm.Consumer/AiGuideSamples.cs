@@ -124,6 +124,23 @@ public static class AiGuideSamples
     }
     // </snippet>
 
+    // <snippet combined-conditions>
+    public static Task<IReadOnlyList<AppUsersRow>> ReadMatchingAsync(
+        DbConnection connection,
+        string prefix,
+        IReadOnlyList<int> ids,
+        DateTimeOffset createdBefore,
+        CancellationToken cancellationToken = default)
+    {
+        var query = Tables.Users.Where(
+            (Tables.Users.DisplayName.Like(prefix + "%") || Tables.Users.DisplayName.IsNull())
+                && Tables.Users.Id.In(ids)
+                && Tables.Users.CreatedAt.LessThan(createdBefore));
+
+        return connection.Query(query, transaction: null).ReadAsync(cancellationToken);
+    }
+    // </snippet>
+
     // <snippet record-insert>
     public static async Task<AppUsersRow> AddUserAsync(
         DbConnection connection,
@@ -132,7 +149,7 @@ public static class AiGuideSamples
         CancellationToken cancellationToken = default)
     {
         var stored = await connection
-            .Query(Tables.Users.InsertReturning(new AppUsersRow(0, email, null, createdAt)))
+            .Query(Tables.Users.InsertReturning(new AppUsersInsertRow(email, null, createdAt)))
             .ReadAsync(cancellationToken);
 
         return stored[0];

@@ -111,7 +111,7 @@ public sealed class SourceGenerationTests
         });
         Assert.Equal(7, connection.Commands[0].ParameterValues["@id"].Value);
         Assert.Equal(DbType.Int32, connection.Commands[0].ParameterValues["@id"].DbType);
-        Assert.Equal(7, connection.Commands[1].ParameterValues["value"].Value);
+        Assert.Equal(7, connection.Commands[1].ParameterValues["@__cobaltum_where_0"].Value);
         Assert.Equal(DBNull.Value, connection.Commands[2].ParameterValues["@name"].Value);
         Assert.Equal(DbType.String, connection.Commands[2].ParameterValues["@name"].DbType);
         Assert.All(connection.Readers, reader => Assert.True(reader.IsClosed));

@@ -27,8 +27,8 @@ without SQL.
 | The SQL text is only known at runtime, or uses syntax the analyzer does not support | `connection.NoCheckQuery(sql)` | `CobaltumRawRow` |
 | Unchecked SQL mapped to an existing type | `connection.NoCheckQuery<T>(sql)` | `T` |
 | Selecting from one table with optional filters | `Tables.<Table>.Query().Where(...)` | the generated table record |
-| Storing one generated record | `Tables.<Table>.Insert(record)` | the affected row count |
-| Storing one generated record and reading it back | `Tables.<Table>.InsertReturning(record)` | the generated table record |
+| Storing one generated record | `Tables.<Table>.Insert(insertRecord)` | the affected row count |
+| Storing one generated record and reading it back | `Tables.<Table>.InsertReturning(insertRecord)` | the generated table record |
 | Updating or deleting one generated record by its primary key | `Tables.<Table>.Update(record)`, `Tables.<Table>.Delete(record)` | the affected row count |
 | Deleting every row matching a filter | `Tables.<Table>.DeleteWhere(...)` | the affected row count |
 
@@ -85,8 +85,10 @@ The generator writes these types into `CobaltumOrmGeneratedNamespace`, which def
 | `SqlSchema.Tables.<Table>.Name` | schema-qualified table name |
 | `SqlSchema.Tables.<Table>.Columns.<Column>` | quoted column name |
 | `<Table>Row` | `public sealed record` for one table row |
+| `<Table>InsertRow` | `public sealed record` for `Insert` and `InsertReturning`, without the columns the database assigns |
 | `Tables.<Table>` | table object with `Query()`, `All()`, `Where(...)`, `Insert(...)`, `InsertReturning(...)`, `Update(...)`, `Delete(...)`, and `DeleteWhere(...)` |
-| `Tables.<Table>.<Column>` | typed column supporting `Equal(value)` |
+| `Tables.<Table>.<Column>` | typed column supporting `Equal`, `NotEqual`, `IsNull`, `IsNotNull`, `LessThan`, `LessThanOrEqual`, `GreaterThan`, `GreaterThanOrEqual`, `<`, `<=`, `>`, `>=`, `Like`, `NotLike`, `In`, `NotIn`, `Between`, and `NotBetween` |
+| `CobaltumPredicate<TRecord>` | one condition; combines with `&&`, `||`, `And`, `Or`, `AndIf`, `OrIf`, `CobaltumPredicate.All`, and `CobaltumPredicate.Any` |
 | `<Container>.<Name>Result` | result record for a named query |
 | `<Container>.<Name>Parameters` | parameter record for a named query or command |
 | `<Container>.<Name>` | `CobaltumQueryDefinition<TParameters, TResult>` for a row-returning query, `CobaltumCommandDefinition<TParameters>` for a command |

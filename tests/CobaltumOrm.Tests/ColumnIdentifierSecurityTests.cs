@@ -51,7 +51,7 @@ public sealed class ColumnIdentifierSecurityTests
 
         var sql = table.Where(table.Column.Equal(1)).Sql;
 
-        Assert.Equal("SELECT 1 FROM test_rows WHERE " + name + " = @value", sql);
+        Assert.Equal("SELECT 1 FROM test_rows WHERE " + name + " = @__cobaltum_where_0", sql);
     }
 
     [Fact]

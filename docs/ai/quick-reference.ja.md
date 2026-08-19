@@ -26,8 +26,8 @@ INSERT、UPDATE、DELETE があり、単純な操作は SQL を書かずに済�
 | SQL の文字列が実行時にしか決まらない、または解析対象外の構文を使う場合 | `connection.NoCheckQuery(sql)` | `CobaltumRawRow` |
 | 検査しない SQL を既存の型へマッピングする場合 | `connection.NoCheckQuery<T>(sql)` | `T` |
 | 1 つのテーブルを任意の条件で絞り込む場合 | `Tables.<Table>.Query().Where(...)` | 生成されるテーブルの `record` |
-| 生成された `record` 1 件を保存する場合 | `Tables.<Table>.Insert(record)` | 影響を受けた行数 |
-| 生成された `record` 1 件を保存して読み戻す場合 | `Tables.<Table>.InsertReturning(record)` | 生成されるテーブルの `record` |
+| 生成された `record` 1 件を保存する場合 | `Tables.<Table>.Insert(insertRecord)` | 影響を受けた行数 |
+| 生成された `record` 1 件を保存して読み戻す場合 | `Tables.<Table>.InsertReturning(insertRecord)` | 生成されるテーブルの `record` |
 | 生成された `record` 1 件を主キーで更新・削除する場合 | `Tables.<Table>.Update(record)`、`Tables.<Table>.Delete(record)` | 影響を受けた行数 |
 | 条件に一致する行をまとめて削除する場合 | `Tables.<Table>.DeleteWhere(...)` | 影響を受けた行数 |
 
@@ -83,8 +83,10 @@ SQL であれば、`Query<<Table>Row>(sql)` や `[Query<<Table>Row>(name, sql)]`
 | `SqlSchema.Tables.<Table>.Name` | スキーマ修飾したテーブル名 |
 | `SqlSchema.Tables.<Table>.Columns.<Column>` | 引用符付きの列名 |
 | `<Table>Row` | テーブル 1 行を表す `public sealed record` |
+| `<Table>InsertRow` | `Insert`、`InsertReturning` に渡す `public sealed record`。データベースが値を決める列は含まない |
 | `Tables.<Table>` | `Query()`、`All()`、`Where(...)`、`Insert(...)`、`InsertReturning(...)`、`Update(...)`、`Delete(...)`、`DeleteWhere(...)` を持つテーブルオブジェクト |
-| `Tables.<Table>.<Column>` | `Equal(value)` を持つ型付きの列 |
+| `Tables.<Table>.<Column>` | `Equal`、`NotEqual`、`IsNull`、`IsNotNull`、`LessThan`、`LessThanOrEqual`、`GreaterThan`、`GreaterThanOrEqual`、`<`、`<=`、`>`、`>=`、`Like`、`NotLike`、`In`、`NotIn`、`Between`、`NotBetween` を持つ型付きの列 |
+| `CobaltumPredicate<TRecord>` | 絞り込み条件 1 つ。`&&`、`||`、`And`、`Or`、`AndIf`、`OrIf`、`CobaltumPredicate.All`、`CobaltumPredicate.Any` で組み合わせる |
 | `<Container>.<Name>Result` | 名前付きクエリの結果 `record` |
 | `<Container>.<Name>Parameters` | 名前付きクエリ・コマンドのパラメーター `record` |
 | `<Container>.<Name>` | 行を返すクエリでは `CobaltumQueryDefinition<TParameters, TResult>`、コマンドでは `CobaltumCommandDefinition<TParameters>` |

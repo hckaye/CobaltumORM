@@ -31,6 +31,7 @@ For coding agents: start with [coding agent tools](docs/ai/agent-tools.md), then
 - [Command-line migration management](#command-line-migration-management)
 - [Explicit generation with the CLI](#explicit-generation-with-the-cli)
 - [Generated table types](#generated-table-types)
+- [Conditions](#conditions)
 - [Record `INSERT`, `UPDATE`, and `DELETE`](#record-insert-update-and-delete)
 - [Named queries](#named-queries)
 - [Result types for constant `Query` SQL](#result-types-for-constant-query-sql)
@@ -53,6 +54,7 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 - Renaming or deleting a schema object in a migration makes old `SqlSchema` references and SQL that uses the old name fail to compile.
   - The current checker supports part of the PostgreSQL syntax used for CRUD operations. It cannot check permissions, constraints, triggers, or outcomes that depend on stored data.
 - Generated table records build single-row `INSERT`, `UPDATE`, and `DELETE` statements, so simple writes need no SQL.
+- Conditions are built from generated columns with `=`, `<>`, `<`, `<=`, `>`, `>=`, `IS NULL`, `LIKE`, `IN`, and `BETWEEN`, and combine with `&&` and `||`.
 - CobaltumORM does not provide EF Core-style change tracking or an equivalent to `SaveChanges`. Queries and commands are executed explicitly.
 
 ### Comparison with other .NET ORMs
@@ -774,17 +776,71 @@ public static class UsersReader
 
 `AppUsersRow`, `Tables.Users`, `Id`, and `DisplayName` in this example are generated from the `app.users` schema in the sample. `id` has the C# type `int`. When the `WhereIf` condition is `false`, its function is not called. The filter is added only when the condition is `true`.
 
+## Conditions
+
+`Where`, `WhereIf`, and `DeleteWhere` take a predicate built from a generated column. Every compared value is passed as a `DbParameter` instead of being written into the SQL text.
+
+| Member | SQL |
+| --- | --- |
+| `Equal(value)`, `NotEqual(value)` | `= @p`, `<> @p`. A null value writes `IS NULL` or `IS NOT NULL` |
+| `IsNull()`, `IsNotNull()` | `IS NULL`, `IS NOT NULL` |
+| `LessThan(value)`, `LessThanOrEqual(value)`, `GreaterThan(value)`, `GreaterThanOrEqual(value)` | `<`, `<=`, `>`, `>=` |
+| `column < value`, `column <= value`, `column > value`, `column >= value` | the same four comparisons written as C# operators |
+| `Like(pattern)`, `NotLike(pattern)` | `LIKE @p`, `NOT LIKE @p` |
+| `In(values)`, `NotIn(values)` | `IN (@p0, @p1)`, `NOT IN (@p0, @p1)` |
+| `Between(low, high)`, `NotBetween(low, high)` | `BETWEEN @p0 AND @p1`, `NOT BETWEEN @p0 AND @p1` |
+
+`And`, `Or`, and the `&&` and `||` operators combine two predicates. Each combination is parenthesized in the generated SQL, so mixing AND and OR keeps the grouping the C# code has. `&&` and `||` read both sides instead of short-circuiting, because both sides are parts of one SQL condition. The `&` and `|` operators do the same thing and stay available.
+
+```csharp
+var query = Tables.Users
+    .Where(
+        (Tables.Users.DisplayName.Like("a%") || Tables.Users.DisplayName.IsNull())
+            && Tables.Users.Id.In(1, 2, 3))
+    .Where(Tables.Users.CreatedAt.LessThan(cutoff));
+```
+
+The query above runs as:
+
+```sql
+SELECT "id", "email", "display_name", "created_at" FROM "app"."users"
+WHERE (("display_name" LIKE @__cobaltum_where_0 OR "display_name" IS NULL)
+  AND "id" IN (@__cobaltum_where_1, @__cobaltum_where_2, @__cobaltum_where_3))
+  AND "created_at" < @__cobaltum_where_4
+```
+
+Separate `Where` calls are joined with AND. `WhereIf` adds a condition only when its flag is set, and `AndIf` and `OrIf` do the same inside one predicate. `CobaltumPredicate.All` and `CobaltumPredicate.Any` combine a list of predicates with AND or OR.
+
+```csharp
+var filters = new List<CobaltumPredicate<AppUsersRow>>();
+if (email != null)
+{
+    filters.Add(Tables.Users.Email.Equal(email));
+}
+
+if (prefix != null)
+{
+    filters.Add(Tables.Users.DisplayName.Like(prefix + "%"));
+}
+
+var query = filters.Count == 0
+    ? Tables.Users.All()
+    : Tables.Users.Where(CobaltumPredicate.All(filters));
+```
+
+`In` and `NotIn` need at least one value and reject null inside the list; write `IsNull` for a null check. The relational comparisons, `Like`, and `Between` reject null for the same reason. `Like` passes the pattern as a parameter, so escaping `%` and `_` in a literal value is the caller's job.
+
 ## Record `INSERT`, `UPDATE`, and `DELETE`
 
 The same table object builds single-row write statements from a generated `record`. `connection.Query(...)` takes the statement and `ExecuteAsync` runs it, returning the affected row count. These members cover the cases where writing the SQL by hand adds nothing. Anything past one row matched by its primary key is written as SQL.
 
 | Member | Statement | Result |
 | --- | --- | --- |
-| `Insert(record)` | `INSERT` without identity columns | affected row count |
+| `Insert(record)` | `INSERT` without the columns the database assigns | affected row count |
 | `InsertReturning(record)` | `INSERT` reporting the stored row | the table `record` |
 | `Update(record)` | `UPDATE` matched by primary key | affected row count |
 | `Delete(record)` | `DELETE` matched by primary key | affected row count |
-| `DeleteWhere(predicate)` | `DELETE` matched by one predicate | affected row count |
+| `DeleteWhere(predicate)` | `DELETE` matched by a predicate | affected row count |
 
 ```csharp
 using System;
@@ -803,7 +859,7 @@ public static class UsersWriter
     {
         var stored = await connection
             .Query(Tables.Users.InsertReturning(
-                new AppUsersRow(0, email, null, DateTimeOffset.UtcNow)))
+                new AppUsersInsertRow(email, null, DateTimeOffset.UtcNow)))
             .ReadAsync(cancellationToken);
 
         return stored[0];
@@ -826,13 +882,13 @@ public static class UsersWriter
 }
 ```
 
-`Insert` leaves identity columns out of the statement, so the database assigns them. The `0` passed for `id` above is never sent. Every other column is written with the value held by the `record`, including columns that declare a SQL default.
+`Insert` and `InsertReturning` take a second generated `record`, `AppUsersInsertRow`, that holds the columns the statement writes. Columns the database assigns, such as an identity primary key, are left out of both the statement and this `record`, so there is no unused value to pass. Every other column is written with the value the `record` holds, including columns that declare a SQL default. `Update` and `Delete` take the table `record`, because they need the primary key.
 
 `InsertReturning` is generated for PostgreSQL and SQLite as `INSERT ... RETURNING`, and for SQL Server as `INSERT ... OUTPUT INSERTED.*`. MySQL and Oracle have no form CobaltumORM generates, so they get `Insert` only. A SQL Server table with triggers rejects `OUTPUT` without `INTO`; read the row back with a separate query in that case.
 
 `Update` writes every column that is neither part of the primary key nor an identity column, and matches the row by the full primary key. `Delete` matches the row the same way. A table without a primary key gets `Insert` and `DeleteWhere` but neither `Update` nor `Delete`, because no column identifies one row. A table whose columns are all part of the primary key gets no `Update`, because there is nothing left to write.
 
-`DeleteWhere` takes the predicate that `Where` takes, and the compared value becomes a `DbParameter`. It accepts one predicate. Deleting on more than one condition is written as SQL.
+`DeleteWhere` takes the same predicates `Where` takes, including conditions combined with `&&` and `||`. Every compared value becomes a `DbParameter`.
 
 ```csharp
 await connection

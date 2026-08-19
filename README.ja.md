@@ -28,6 +28,7 @@ CobaltumORM は PostgreSQL を主な対象とする .NET / C# 向け ORM です�
 - [CLI によるマイグレーション管理](#cli-によるマイグレーション管理)
 - [CLI による明示的なコード生成](#cli-による明示的なコード生成)
 - [生成されるテーブル型](#生成されるテーブル型)
+- [絞り込み条件](#絞り込み条件)
 - [`record` からの `INSERT`、`UPDATE`、`DELETE`](#record-からの-insertupdatedelete)
 - [名前付きクエリ](#名前付きクエリ)
 - [内容がコンパイル時に決まる `Query` の結果型](#内容がコンパイル時に決まる-query-の結果型)
@@ -51,6 +52,7 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 - マイグレーションで名前を変更または削除すると、古い `SqlSchema` 参照と古い名前を含む SQL はコンパイルエラーになります。現在のスキーマでは実行できない SQL をビルド時に検出します。
   - 現在の検査対象は、PostgreSQL の CRUD 操作に関わる一部の構文です。権限、制約、トリガー、実データに依存する成否はビルド時には検査できません。
 - 生成されたテーブルの `record` から 1 行分の `INSERT`、`UPDATE`、`DELETE` を組み立てられます。単純な更新処理は SQL を書かずに済みます。
+- 絞り込み条件は生成された列から組み立てます。`=`、`<>`、`<`、`<=`、`>`、`>=`、`IS NULL`、`LIKE`、`IN`、`BETWEEN` に対応し、`&&` と `||` で組み合わせられます。
 - EF Core の変更追跡や `SaveChanges` に相当する API は提供しません。クエリと更新処理は明示的に実行します。
 
 ### 主要な他ORMとの比較
@@ -772,17 +774,71 @@ public static class UsersReader
 
 この例の `AppUsersRow`、`Tables.Users`、`Id`、`DisplayName` は、サンプルにある `app.users` スキーマから生成される名前です。`id` は `int` です。`WhereIf` の条件が `false` の場合は渡した関数を呼ばず、`true` の場合だけ絞り込み条件を追加します。
 
+## 絞り込み条件
+
+`Where`、`WhereIf`、`DeleteWhere` は、生成された列から組み立てた条件を受け取ります。比較する値は SQL 文へ書き込まず、`DbParameter` として渡されます。
+
+| メンバー | 生成される SQL |
+| --- | --- |
+| `Equal(value)`、`NotEqual(value)` | `= @p`、`<> @p`。値が null のときは `IS NULL`、`IS NOT NULL` |
+| `IsNull()`、`IsNotNull()` | `IS NULL`、`IS NOT NULL` |
+| `LessThan(value)`、`LessThanOrEqual(value)`、`GreaterThan(value)`、`GreaterThanOrEqual(value)` | `<`、`<=`、`>`、`>=` |
+| `column < value`、`column <= value`、`column > value`、`column >= value` | 上と同じ 4 つの比較を C# の演算子で書いたもの |
+| `Like(pattern)`、`NotLike(pattern)` | `LIKE @p`、`NOT LIKE @p` |
+| `In(values)`、`NotIn(values)` | `IN (@p0, @p1)`、`NOT IN (@p0, @p1)` |
+| `Between(low, high)`、`NotBetween(low, high)` | `BETWEEN @p0 AND @p1`、`NOT BETWEEN @p0 AND @p1` |
+
+条件どうしは `And`、`Or`、および `&&`、`||` 演算子で組み合わせられます。組み合わせた条件は生成される SQL で括弧に入るため、AND と OR を混ぜても C# で書いたとおりの組み合わせになります。`&&` と `||` は両辺を必ず評価します。どちらも 1 つの SQL 条件の一部なので、途中で打ち切りません。`&` と `|` も同じ意味で使えます。
+
+```csharp
+var query = Tables.Users
+    .Where(
+        (Tables.Users.DisplayName.Like("a%") || Tables.Users.DisplayName.IsNull())
+            && Tables.Users.Id.In(1, 2, 3))
+    .Where(Tables.Users.CreatedAt.LessThan(cutoff));
+```
+
+上のクエリは次の SQL として実行されます。
+
+```sql
+SELECT "id", "email", "display_name", "created_at" FROM "app"."users"
+WHERE (("display_name" LIKE @__cobaltum_where_0 OR "display_name" IS NULL)
+  AND "id" IN (@__cobaltum_where_1, @__cobaltum_where_2, @__cobaltum_where_3))
+  AND "created_at" < @__cobaltum_where_4
+```
+
+`Where` を続けて書いた条件は AND で結合されます。`WhereIf` は条件が成り立つときだけ絞り込みを追加します。1 つの条件式の中で同じことをするのが `AndIf` と `OrIf` です。条件をリストで組み立てた場合は、`CobaltumPredicate.All` と `CobaltumPredicate.Any` が AND と OR でまとめます。
+
+```csharp
+var filters = new List<CobaltumPredicate<AppUsersRow>>();
+if (email != null)
+{
+    filters.Add(Tables.Users.Email.Equal(email));
+}
+
+if (prefix != null)
+{
+    filters.Add(Tables.Users.DisplayName.Like(prefix + "%"));
+}
+
+var query = filters.Count == 0
+    ? Tables.Users.All()
+    : Tables.Users.Where(CobaltumPredicate.All(filters));
+```
+
+`In` と `NotIn` は値が 1 つ以上必要で、リストの中の null は受け付けません。null との比較には `IsNull` を使います。大小比較、`Like`、`Between` も同じ理由で null を受け付けません。`Like` はパターンをパラメーターとして渡すため、文字としての `%` と `_` のエスケープは呼び出し側で行います。
+
 ## `record` からの `INSERT`、`UPDATE`、`DELETE`
 
 同じテーブル情報から、生成された `record` 1 件を対象とする更新処理を組み立てられます。組み立てたものを `connection.Query(...)` に渡し、`ExecuteAsync` で実行すると影響を受けた行数が返ります。用意しているのは、SQL を手で書いても得るものがない範囲だけです。主キーで 1 行を指定する以上のことは SQL で書きます。
 
 | メンバー | 生成される文 | 戻り値 |
 | --- | --- | --- |
-| `Insert(record)` | 自動採番の列を除いた `INSERT` | 影響を受けた行数 |
+| `Insert(record)` | データベースが値を決める列を除いた `INSERT` | 影響を受けた行数 |
 | `InsertReturning(record)` | 保存後の行を返す `INSERT` | テーブルの `record` |
 | `Update(record)` | 主キーで 1 行を指定する `UPDATE` | 影響を受けた行数 |
 | `Delete(record)` | 主キーで 1 行を指定する `DELETE` | 影響を受けた行数 |
-| `DeleteWhere(predicate)` | 条件 1 つで絞り込む `DELETE` | 影響を受けた行数 |
+| `DeleteWhere(predicate)` | 条件で絞り込む `DELETE` | 影響を受けた行数 |
 
 ```csharp
 using System;
@@ -801,7 +857,7 @@ public static class UsersWriter
     {
         var stored = await connection
             .Query(Tables.Users.InsertReturning(
-                new AppUsersRow(0, email, null, DateTimeOffset.UtcNow)))
+                new AppUsersInsertRow(email, null, DateTimeOffset.UtcNow)))
             .ReadAsync(cancellationToken);
 
         return stored[0];
@@ -824,13 +880,13 @@ public static class UsersWriter
 }
 ```
 
-`Insert` は自動採番の列を文から外すため、値はデータベースが決めます。上の例で `id` に渡している `0` は送信されません。それ以外の列は、SQL 側に既定値があるものも含めて `record` が持つ値をそのまま書き込みます。
+`Insert` と `InsertReturning` は、書き込む列だけを持つ `record`（この例では `AppUsersInsertRow`）を受け取ります。自動採番の主キーのようにデータベースが値を決める列は、生成される文からもこの `record` からも外れるため、使われない値を渡す必要はありません。それ以外の列は、SQL 側に既定値があるものも含めて `record` が持つ値をそのまま書き込みます。`Update` と `Delete` は主キーが必要なので、テーブルの `record` を受け取ります。
 
 `InsertReturning` が生成されるのは、`INSERT ... RETURNING` を使う PostgreSQL と SQLite、`INSERT ... OUTPUT INSERTED.*` を使う SQL Server です。MySQL と Oracle には CobaltumORM が生成する形がないため、`Insert` だけが生成されます。トリガーのある SQL Server のテーブルは `INTO` を伴わない `OUTPUT` を受け付けないので、その場合は別のクエリで読み戻してください。
 
 `Update` は、主キーでも自動採番でもないすべての列を書き換え、主キー全体で行を指定します。`Delete` も同じ方法で行を指定します。主キーのないテーブルでは、1 行を特定できないため `Update` と `Delete` は生成されず、`Insert` と `DeleteWhere` だけが生成されます。すべての列が主キーのテーブルでは書き換える列が残らないため、`Update` は生成されません。
 
-`DeleteWhere` は `Where` と同じ条件を受け取り、比較する値は `DbParameter` として渡されます。受け取れる条件は 1 つです。複数の条件で削除する場合は SQL を書きます。
+`DeleteWhere` は `Where` と同じ条件を受け取ります。`&&` と `||` で組み合わせた条件も渡せます。比較する値は `DbParameter` として渡されます。
 
 ```csharp
 await connection

@@ -222,6 +222,32 @@ public static Task<IReadOnlyList<AppUsersRow>> ReadFilteredAsync(
 }
 ```
 
+## Combine conditions with AND and OR
+
+`And`, `Or`, and the `&&` and `||` operators join two conditions, and each combination is
+parenthesized in the SQL. `&&` and `||` read both sides; they do not short-circuit, because both
+sides are parts of one SQL condition. Columns compare with `Equal`, `NotEqual`, `IsNull`, `IsNotNull`, `Like`,
+`In`, `Between`, and the four relational comparisons, which are also written as `<`, `<=`, `>`, and
+`>=`. Every compared value is passed as a database parameter.
+
+<!-- snippet: combined-conditions -->
+```csharp
+public static Task<IReadOnlyList<AppUsersRow>> ReadMatchingAsync(
+    DbConnection connection,
+    string prefix,
+    IReadOnlyList<int> ids,
+    DateTimeOffset createdBefore,
+    CancellationToken cancellationToken = default)
+{
+    var query = Tables.Users.Where(
+        (Tables.Users.DisplayName.Like(prefix + "%") || Tables.Users.DisplayName.IsNull())
+            && Tables.Users.Id.In(ids)
+            && Tables.Users.CreatedAt.LessThan(createdBefore));
+
+    return connection.Query(query, transaction: null).ReadAsync(cancellationToken);
+}
+```
+
 ## Store a record without writing SQL
 
 `Tables.<Table>.Insert` builds an INSERT from one generated record. Identity columns are left out of
@@ -238,7 +264,7 @@ public static async Task<AppUsersRow> AddUserAsync(
     CancellationToken cancellationToken = default)
 {
     var stored = await connection
-        .Query(Tables.Users.InsertReturning(new AppUsersRow(0, email, null, createdAt)))
+        .Query(Tables.Users.InsertReturning(new AppUsersInsertRow(email, null, createdAt)))
         .ReadAsync(cancellationToken);
 
     return stored[0];

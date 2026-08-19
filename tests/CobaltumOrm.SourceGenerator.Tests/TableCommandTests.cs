@@ -57,7 +57,9 @@ public sealed class TableCommandTests
                 public static async Task<int> Run(DbConnection connection)
                 {
                     var record = new UsersRow(7, "alice@example.test", null);
-                    var inserted = await connection.Query(Tables.Users.Insert(record)).ExecuteAsync();
+                    var inserted = await connection
+                        .Query(Tables.Users.Insert(new UsersInsertRow("alice@example.test", null)))
+                        .ExecuteAsync();
                     var updated = await connection.Query(Tables.Users.Update(record)).ExecuteAsync();
                     var deleted = await connection.Query(Tables.Users.Delete(record)).ExecuteAsync();
                     return inserted + updated + deleted;
@@ -173,7 +175,7 @@ public sealed class TableCommandTests
                 public static async Task<int> Run(DbConnection connection)
                 {
                     var rows = await connection
-                        .Query(Tables.Users.InsertReturning(new UsersRow(0, "alice@example.test", null)))
+                        .Query(Tables.Users.InsertReturning(new UsersInsertRow("alice@example.test", null)))
                         .ReadAsync();
                     return rows[0].Id;
                 }
@@ -207,7 +209,7 @@ public sealed class TableCommandTests
             {
                 public static CobaltumQueryDefinition<UsersRow> Run() =>
                     Tables.Users
-                        .InsertReturning(new UsersRow(0, "alice@example.test", null))
+                        .InsertReturning(new UsersInsertRow("alice@example.test", null))
                         .Where(Tables.Users.Id.Equal(1));
             }
             """;
@@ -316,6 +318,122 @@ public sealed class TableCommandTests
             .Single(line => line.Contains("\"@p0\", record.Body", StringComparison.Ordinal));
         Assert.Contains("AddConfigured", insert, StringComparison.Ordinal);
         Assert.Contains("DataTypeName = \"jsonb\"", insert, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GeneratesAnInsertRecordWithoutTheColumnsTheDatabaseAssigns()
+    {
+        var result = Generate("public static class Empty { }", UsersDdl);
+
+        AssertNoProblems(result);
+        var record = result.GeneratedText
+            .Split(new[] { "public sealed record UsersInsertRow(" }, StringSplitOptions.None)[1]
+            .Split(new[] { ");" }, StringSplitOptions.None)[0];
+        Assert.Contains("global::System.String Email", record, StringComparison.Ordinal);
+        Assert.Contains("global::System.String? DisplayName", record, StringComparison.Ordinal);
+        Assert.DoesNotContain("Id", record, StringComparison.Ordinal);
+        Assert.Contains(
+            "public global::CobaltumOrm.CobaltumCommandDefinition Insert(UsersInsertRow record)",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void KeepsPrimaryKeyColumnsTheApplicationSuppliesInTheInsertRecord()
+    {
+        var result = Generate(
+            "public static class Empty { }",
+            "CREATE TABLE tenants (code varchar(20) PRIMARY KEY, label varchar(80) NOT NULL);");
+
+        AssertNoProblems(result);
+        var record = result.GeneratedText
+            .Split(new[] { "public sealed record TenantsInsertRow(" }, StringSplitOptions.None)[1]
+            .Split(new[] { ");" }, StringSplitOptions.None)[0];
+        Assert.Contains("global::System.String Code", record, StringComparison.Ordinal);
+        Assert.Contains("global::System.String Label", record, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteWhereCombinesConditionsWithAndOr()
+    {
+        const string consumer = """
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+            using TestApp.Generated;
+
+            namespace TestApp;
+
+            public static class Consumer
+            {
+                public static Task<int> Run(DbConnection connection) =>
+                    connection
+                        .Query(Tables.Users.DeleteWhere(
+                            (Tables.Users.Email.Like("%@example.test") | Tables.Users.Id.In(1, 2))
+                                & Tables.Users.DisplayName.IsNull()))
+                        .ExecuteAsync();
+            }
+            """;
+        var result = Generate(consumer, UsersDdl);
+
+        AssertNoProblems(result);
+        var connection = new QueryFakeDbConnection();
+        Assert.Equal(1, await Run<int>(result, connection));
+
+        var command = Assert.Single(connection.Commands);
+        Assert.Equal(
+            "DELETE FROM \"users\" WHERE ((\"email\" LIKE @__cobaltum_where_0 " +
+            "OR \"id\" IN (@__cobaltum_where_1, @__cobaltum_where_2)) " +
+            "AND \"display_name\" IS NULL)",
+            command.CommandText);
+        Assert.Equal("%@example.test", command.ParameterValues["@__cobaltum_where_0"].Value);
+        Assert.Equal(1, command.ParameterValues["@__cobaltum_where_1"].Value);
+        Assert.Equal(2, command.ParameterValues["@__cobaltum_where_2"].Value);
+        Assert.Equal(DbType.Int32, command.ParameterValues["@__cobaltum_where_2"].DbType);
+        Assert.Equal(3, command.ParameterValues.Count);
+    }
+
+    [Fact]
+    public async Task WhereCombinesComparisonsOnAGeneratedTable()
+    {
+        const string consumer = """
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+            using TestApp.Generated;
+
+            namespace TestApp;
+
+            public static class Consumer
+            {
+                public static async Task<int> Run(DbConnection connection)
+                {
+                    var rows = await connection
+                        .Query(Tables.Users
+                            .Where(Tables.Users.Id > 5 & Tables.Users.Id <= 10)
+                            .Where(Tables.Users.Email.NotEqual("root@example.test")))
+                        .ReadAsync();
+                    return rows.Count;
+                }
+            }
+            """;
+        var result = Generate(consumer, UsersDdl);
+
+        AssertNoProblems(result);
+        var connection = QueryFakeDbConnection.WithColumns(
+            new[] { "id", "email", "display_name" },
+            new object?[] { 7, "alice@example.test", DBNull.Value });
+        Assert.Equal(1, await Run<int>(result, connection));
+
+        var command = Assert.Single(connection.Commands);
+        Assert.Equal(
+            "SELECT \"id\", \"email\", \"display_name\" FROM \"users\" " +
+            "WHERE (\"id\" > @__cobaltum_where_0 AND \"id\" <= @__cobaltum_where_1) " +
+            "AND \"email\" <> @__cobaltum_where_2",
+            command.CommandText);
+        Assert.Equal(5, command.ParameterValues["@__cobaltum_where_0"].Value);
+        Assert.Equal(10, command.ParameterValues["@__cobaltum_where_1"].Value);
+        Assert.Equal("root@example.test", command.ParameterValues["@__cobaltum_where_2"].Value);
     }
 
     private static string ProviderDdl(string provider) => provider switch

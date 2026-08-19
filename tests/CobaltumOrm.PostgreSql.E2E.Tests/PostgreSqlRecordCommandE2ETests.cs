@@ -25,7 +25,7 @@ public sealed class PostgreSqlRecordCommandE2ETests
         try
         {
             var affected = await connection
-                .Query(Tables.E2eRecords.Insert(new E2eRecordsRow(0, "assigned", null)))
+                .Query(Tables.E2eRecords.Insert(new E2eRecordsInsertRow("assigned", null)))
                 .ExecuteAsync();
 
             Assert.Equal(1, affected);
@@ -48,7 +48,7 @@ public sealed class PostgreSqlRecordCommandE2ETests
         try
         {
             var stored = Assert.Single(await connection
-                .Query(Tables.E2eRecords.InsertReturning(new E2eRecordsRow(0, "returning", "note")))
+                .Query(Tables.E2eRecords.InsertReturning(new E2eRecordsInsertRow("returning", "note")))
                 .ReadAsync());
 
             Assert.True(stored.Id > 0);
@@ -133,7 +133,7 @@ public sealed class PostgreSqlRecordCommandE2ETests
             await using (var transaction = await connection.BeginTransactionAsync())
             {
                 await connection
-                    .Query(Tables.E2eRecords.Insert(new E2eRecordsRow(0, "rolled-back", null)), transaction)
+                    .Query(Tables.E2eRecords.Insert(new E2eRecordsInsertRow("rolled-back", null)), transaction)
                     .ExecuteAsync();
                 Assert.Single(await connection.Query(Tables.E2eRecords.All(), transaction).ReadAsync());
                 await transaction.RollbackAsync();
@@ -169,12 +169,89 @@ public sealed class PostgreSqlRecordCommandE2ETests
         }
     }
 
+    [Fact]
+    public async Task CombinedConditionsSelectTheRowsPostgreSqlMatches()
+    {
+        await using var connection = await OpenConnectionAsync();
+        try
+        {
+            var first = await InsertReturningAsync(connection, "alpha", "kept");
+            var second = await InsertReturningAsync(connection, "beta", null);
+            await InsertReturningAsync(connection, "gamma", "other");
+
+            var matched = await connection
+                .Query(Tables.E2eRecords.Where(
+                    (Tables.E2eRecords.Label.Like("al%") | Tables.E2eRecords.Note.IsNull())
+                        & Tables.E2eRecords.Id.In(first.Id, second.Id)))
+                .ReadAsync();
+
+            Assert.Equal(
+                new[] { first.Id, second.Id }.OrderBy(id => id),
+                matched.Select(row => row.Id).OrderBy(id => id));
+        }
+        finally
+        {
+            await ClearAsync(connection);
+        }
+    }
+
+    [Fact]
+    public async Task RangeAndComparisonConditionsRunOnPostgreSql()
+    {
+        await using var connection = await OpenConnectionAsync();
+        try
+        {
+            var first = await InsertReturningAsync(connection, "one", null);
+            var second = await InsertReturningAsync(connection, "two", null);
+
+            var afterFirst = await connection
+                .Query(Tables.E2eRecords.Where(Tables.E2eRecords.Id > first.Id))
+                .ReadAsync();
+            var inRange = await connection
+                .Query(Tables.E2eRecords.Where(
+                    Tables.E2eRecords.Id.Between(first.Id, second.Id)))
+                .ReadAsync();
+
+            Assert.Equal(second.Id, Assert.Single(afterFirst).Id);
+            Assert.Equal(2, inRange.Count);
+        }
+        finally
+        {
+            await ClearAsync(connection);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteWhereRemovesRowsMatchingACombinedCondition()
+    {
+        await using var connection = await OpenConnectionAsync();
+        try
+        {
+            await InsertReturningAsync(connection, "batch", null);
+            await InsertReturningAsync(connection, "batch", "kept");
+            await InsertReturningAsync(connection, "other", null);
+
+            var deleted = await connection
+                .Query(Tables.E2eRecords.DeleteWhere(
+                    Tables.E2eRecords.Label.Equal("batch") & Tables.E2eRecords.Note.IsNull()))
+                .ExecuteAsync();
+
+            Assert.Equal(1, deleted);
+            var remaining = await connection.Query(Tables.E2eRecords.All()).ReadAsync();
+            Assert.Equal(2, remaining.Count);
+        }
+        finally
+        {
+            await ClearAsync(connection);
+        }
+    }
+
     private static async Task<E2eRecordsRow> InsertReturningAsync(
         NpgsqlConnection connection,
         string label,
         string? note) =>
         (await connection
-            .Query(Tables.E2eRecords.InsertReturning(new E2eRecordsRow(0, label, note)))
+            .Query(Tables.E2eRecords.InsertReturning(new E2eRecordsInsertRow(label, note)))
             .ReadAsync())
         .Single();
 

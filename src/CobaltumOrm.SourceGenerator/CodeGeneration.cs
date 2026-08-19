@@ -329,13 +329,17 @@ internal static class GeneratedSourceWriter
             .OrderBy(table => table.Schema ?? string.Empty, StringComparer.Ordinal)
             .ThenBy(table => table.Name, StringComparer.Ordinal)
             .ToList();
-        var tableNames = CSharpNames.Allocate(
+        string RecordBaseName(Table table) => CSharpNames.Pascal(
+            dialect.SchemaRules.IsDefaultSchema(table.Schema)
+                ? table.Name
+                : table.Schema + "_" + table.Name,
+            "Table");
+
+        var tableNames = CSharpNames.Allocate(tables, table => RecordBaseName(table) + "Row");
+        var insertNames = CSharpNames.Allocate(
             tables,
-            table => CSharpNames.Pascal(
-                dialect.SchemaRules.IsDefaultSchema(table.Schema)
-                    ? table.Name
-                    : table.Schema + "_" + table.Name,
-                "Table") + "Row");
+            table => RecordBaseName(table) + "InsertRow",
+            reserved: tableNames.Values);
 
         var builder = Header(generatedNamespace);
         foreach (var table in tables)
@@ -372,6 +376,28 @@ internal static class GeneratedSourceWriter
             }
 
             builder.AppendLine();
+
+            var insertedColumns = InsertedColumns(table);
+            if (insertedColumns.Count != 0)
+            {
+                builder.Append("public sealed record ").Append(insertNames[table]).AppendLine("(");
+                for (var position = 0; position < insertedColumns.Count; position++)
+                {
+                    var index = insertedColumns[position];
+                    var column = table.Columns[index];
+                    builder.Append("    [property: global::CobaltumOrm.CobaltumColumn(")
+                        .Append(CSharpNames.Literal(column.Name)).Append(", ")
+                        .Append(CSharpNames.Literal(column.SqlType)).Append(", ")
+                        .Append(column.IsNullable ? "true" : "false").Append(", ")
+                        .Append(column.IsPrimaryKey ? "true" : "false").Append(", ")
+                        .Append(CSharpNames.Literal(column.DefaultExpression)).Append(")] ")
+                        .Append(environment.TypeName(query.Columns[index].ClrType)).Append(' ')
+                        .Append(columnNames[column]);
+                    builder.AppendLine(position == insertedColumns.Count - 1 ? ");" : ",");
+                }
+
+                builder.AppendLine();
+            }
         }
 
         builder.AppendLine("public static class Tables");
@@ -444,7 +470,17 @@ internal static class GeneratedSourceWriter
                 builder.AppendLine(");");
             }
 
-            AppendTableCommands(builder, environment, dialect, table, query, recordName, columnNames, quotedTable, quotedColumns);
+            AppendTableCommands(
+                builder,
+                environment,
+                dialect,
+                table,
+                query,
+                recordName,
+                insertNames[table],
+                columnNames,
+                quotedTable,
+                quotedColumns);
 
             builder.AppendLine();
             builder.Append("    private static ").Append(recordName).AppendLine(" Materialize(global::System.Data.Common.DbDataReader reader)");
@@ -750,24 +786,21 @@ internal static class GeneratedSourceWriter
         Table table,
         AnalysisResult query,
         string recordName,
+        string insertRecordName,
         Dictionary<Column, string> columnNames,
         string quotedTable,
         IReadOnlyList<string> quotedColumns)
     {
         var prefix = ParameterPrefix(dialect);
-        var insertColumns = new List<int>();
+        var insertColumns = InsertedColumns(table);
         var setColumns = new List<int>();
         var keyColumns = new List<int>();
         for (var index = 0; index < table.Columns.Count; index++)
         {
             var column = table.Columns[index];
-            if (!column.IsIdentity)
+            if (!column.IsIdentity && !column.IsPrimaryKey)
             {
-                insertColumns.Add(index);
-                if (!column.IsPrimaryKey)
-                {
-                    setColumns.Add(index);
-                }
+                setColumns.Add(index);
             }
 
             if (column.IsPrimaryKey)
@@ -790,8 +823,8 @@ internal static class GeneratedSourceWriter
             var values = " VALUES (" + string.Join(", ", valueParameters) + ")";
 
             builder.AppendLine();
-            builder.AppendLine("    /// <summary>Builds an INSERT for one record. Identity columns keep their database-assigned values.</summary>");
-            builder.Append("    public global::CobaltumOrm.CobaltumCommandDefinition Insert(").Append(recordName).AppendLine(" record)");
+            builder.AppendLine("    /// <summary>Builds an INSERT for one record. Columns the database assigns are left out of the statement.</summary>");
+            builder.Append("    public global::CobaltumOrm.CobaltumCommandDefinition Insert(").Append(insertRecordName).AppendLine(" record)");
             builder.AppendLine("    {");
             AppendRecordNullCheck(builder);
             builder.AppendLine("        return new global::CobaltumOrm.CobaltumCommandDefinition(");
@@ -808,7 +841,7 @@ internal static class GeneratedSourceWriter
                 builder.AppendLine();
                 builder.AppendLine("    /// <summary>Builds an INSERT that returns the stored record, including database-assigned values.</summary>");
                 builder.Append("    public global::CobaltumOrm.CobaltumQueryDefinition<").Append(recordName)
-                    .Append("> InsertReturning(").Append(recordName).AppendLine(" record)");
+                    .Append("> InsertReturning(").Append(insertRecordName).AppendLine(" record)");
                 builder.AppendLine("    {");
                 AppendRecordNullCheck(builder);
                 builder.Append("        return global::CobaltumOrm.CobaltumQueryDefinition<").Append(recordName)
@@ -868,6 +901,24 @@ internal static class GeneratedSourceWriter
         AppendBindings(builder, environment, dialect, table, query, columnNames, keyColumns, keyParameters);
         builder.AppendLine("            });");
         builder.AppendLine("    }");
+    }
+
+    /// <summary>
+    /// Returns the indexes of the columns an INSERT writes, which is every column the database
+    /// does not assign by itself.
+    /// </summary>
+    private static List<int> InsertedColumns(Table table)
+    {
+        var columns = new List<int>();
+        for (var index = 0; index < table.Columns.Count; index++)
+        {
+            if (!table.Columns[index].IsIdentity)
+            {
+                columns.Add(index);
+            }
+        }
+
+        return columns;
     }
 
     /// <summary>
