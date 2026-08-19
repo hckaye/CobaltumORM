@@ -195,8 +195,177 @@ public sealed class SourceGenerationTests
                 ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL, name text NOT NULL);")
             });
 
-        Assert.Contains(result.AllDiagnostics, diagnostic => diagnostic.Id == "COB009");
+        var diagnostic = Assert.Single(result.AllDiagnostics, item => item.Id == "COB009");
+        var message = diagnostic.GetMessage();
+        Assert.Contains("returned column 'id' has CLR type 'int'", message, StringComparison.Ordinal);
+        Assert.Contains("parameter 'Id' of type 'string'", message, StringComparison.Ordinal);
         Assert.DoesNotContain("record AllResult", result.GeneratedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericQueryAttributeReportsAMissingResultColumnByName()
+    {
+        const string source = """
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            public sealed record UserView(int Id, [ResultColumn("display_name")] string Name);
+
+            [Query<UserView>("All", "SELECT id, name FROM users")]
+            public static partial class UserQueries
+            {
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL, name text NOT NULL);")
+            });
+
+        var diagnostic = Assert.Single(result.AllDiagnostics, item => item.Id == "COB009");
+        Assert.Contains(
+            "parameter 'Name' expects a column named 'display_name', but no such column is returned",
+            diagnostic.GetMessage(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task QueryAttributeGeneratesCommandsForStatementsWithoutRows()
+    {
+        const string source = """
+            using System.Data.Common;
+            using System.Threading;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            [Query("RenameUser", "UPDATE users SET name = @name WHERE id = @id")]
+            [Query("DeleteUser", "DELETE FROM users WHERE id = @id")]
+            [Query("ClearUsers", "TRUNCATE TABLE users")]
+            public static partial class UserCommands
+            {
+            }
+
+            public static class Consumer
+            {
+                public static async Task<int> Run(
+                    DbConnection connection,
+                    CancellationToken cancellationToken)
+                {
+                    var renamed = await UserCommands.RenameUserAsync(connection, "alice", 7, cancellationToken: cancellationToken);
+                    var deleted = await UserCommands.DeleteUserAsync(connection, 7, cancellationToken: cancellationToken);
+                    var cleared = await UserCommands.ClearUsersAsync(connection, cancellationToken: cancellationToken);
+                    return renamed + deleted + cleared;
+                }
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL, name text NOT NULL);")
+            });
+
+        AssertNoErrors(result);
+        Assert.Contains(
+            "CobaltumCommandDefinition<RenameUserParameters>",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+        Assert.Contains("Task<int> RenameUserAsync(", result.GeneratedText, StringComparison.Ordinal);
+        Assert.DoesNotContain("record RenameUserResult", result.GeneratedText, StringComparison.Ordinal);
+        Assert.DoesNotContain("record ClearUsersResult", result.GeneratedText, StringComparison.Ordinal);
+
+        var assembly = result.EmitAndLoad();
+        using var cancellationSource = new CancellationTokenSource();
+        var connection = new QueryFakeDbConnection();
+        connection.Open();
+        var consumer = assembly.GetType("TestApp.Consumer", throwOnError: true)!;
+        var task = Assert.IsAssignableFrom<Task<int>>(consumer.GetMethod("Run")!.Invoke(
+            null,
+            new object[] { connection, cancellationSource.Token }));
+
+        Assert.Equal(3, await task);
+        Assert.Equal(3, connection.Commands.Count);
+        Assert.Equal("UPDATE users SET name = @name WHERE id = @id", connection.Commands[0].CommandText);
+        Assert.Equal("alice", connection.Commands[0].ParameterValues["@name"].Value);
+        Assert.Equal(7, connection.Commands[0].ParameterValues["@id"].Value);
+        Assert.Equal("DELETE FROM users WHERE id = @id", connection.Commands[1].CommandText);
+        Assert.Equal("TRUNCATE TABLE users", connection.Commands[2].CommandText);
+        Assert.All(connection.Commands, command => Assert.True(command.WasDisposed));
+    }
+
+    [Fact]
+    public void TypedQueryAttributeRequiresARowReturningStatement()
+    {
+        const string source = """
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            [Query<int>("DeleteAll", "DELETE FROM users")]
+            public static partial class UserCommands
+            {
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL);")
+            });
+
+        var diagnostic = Assert.Single(result.AllDiagnostics, item => item.Id == "COB009");
+        Assert.Contains("does not return rows", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.DoesNotContain("DeleteAllAsync", result.GeneratedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GenericQueryAttributeMapsASingleAggregateColumnToAScalar()
+    {
+        const string source = """
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+
+            namespace TestApp;
+
+            [Query<long>("CountUsers", "SELECT COUNT(*) AS total FROM users")]
+            public static partial class UserQueries
+            {
+            }
+
+            public static class Consumer
+            {
+                public static async Task<long> Run(DbConnection connection)
+                {
+                    var counts = await UserQueries.CountUsersAsync(connection);
+                    return counts[0];
+                }
+            }
+            """;
+        var result = GeneratorTestHost.Run(
+            source,
+            new[]
+            {
+                ("/db/V1__users.sql", "CREATE TABLE users (id integer NOT NULL);")
+            });
+
+        AssertNoErrors(result);
+        Assert.Contains(
+            "CobaltumQueryDefinition<CountUsersParameters, long>",
+            result.GeneratedText,
+            StringComparison.Ordinal);
+
+        var assembly = result.EmitAndLoad();
+        var connection = QueryFakeDbConnection.WithColumns(new[] { "total" }, new object?[] { 41L });
+        var consumer = assembly.GetType("TestApp.Consumer", throwOnError: true)!;
+        var task = Assert.IsAssignableFrom<Task<long>>(consumer.GetMethod("Run")!.Invoke(
+            null,
+            new object[] { connection }));
+        Assert.Equal(41L, await task);
     }
 
     [Fact]

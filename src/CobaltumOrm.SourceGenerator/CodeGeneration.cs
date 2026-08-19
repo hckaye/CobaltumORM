@@ -479,6 +479,7 @@ internal static class GeneratedSourceWriter
         {
             var source = queries[queryIndex];
             var analysis = analyses[queryIndex];
+            var isCommand = analysis.Columns.Count == 0;
             var queryName = CSharpNames.Pascal(source.Name, "Query");
             var resultName = source.ResultType == null
                 ? queryName + "Result"
@@ -496,7 +497,7 @@ internal static class GeneratedSourceWriter
                 reserved: new[] { "connection", "transaction", "cancellationToken" });
 
             ResultMapping? resultMapping = null;
-            if (source.ResultType == null)
+            if (!isCommand && source.ResultType == null)
             {
                 builder.Append("    public sealed record ").Append(resultName).AppendLine("(");
                 for (var index = 0; index < analysis.Columns.Count; index++)
@@ -508,15 +509,16 @@ internal static class GeneratedSourceWriter
 
                 builder.AppendLine();
             }
-            else
+            else if (!isCommand)
             {
                 ResultMappingFactory.TryCreate(
                     compilation,
-                    source.ResultType,
+                    source.ResultType!,
                     analysis,
                     out resultMapping,
                     out _);
             }
+
             if (analysis.Parameters.Count == 0)
             {
                 builder.Append("    public sealed record ").Append(parametersName).AppendLine("();");
@@ -533,11 +535,23 @@ internal static class GeneratedSourceWriter
             }
 
             builder.AppendLine();
-            builder.Append("    public static global::CobaltumOrm.CobaltumQueryDefinition<")
-                .Append(parametersName).Append(", ").Append(resultName).Append("> ")
-                .Append(queryName).AppendLine(" { get; } =");
-            builder.Append("        new global::CobaltumOrm.CobaltumQueryDefinition<")
-                .Append(parametersName).Append(", ").Append(resultName).AppendLine(">(");
+            if (isCommand)
+            {
+                builder.Append("    public static global::CobaltumOrm.CobaltumCommandDefinition<")
+                    .Append(parametersName).Append("> ")
+                    .Append(queryName).AppendLine(" { get; } =");
+                builder.Append("        new global::CobaltumOrm.CobaltumCommandDefinition<")
+                    .Append(parametersName).AppendLine(">(");
+            }
+            else
+            {
+                builder.Append("    public static global::CobaltumOrm.CobaltumQueryDefinition<")
+                    .Append(parametersName).Append(", ").Append(resultName).Append("> ")
+                    .Append(queryName).AppendLine(" { get; } =");
+                builder.Append("        new global::CobaltumOrm.CobaltumQueryDefinition<")
+                    .Append(parametersName).Append(", ").Append(resultName).AppendLine(">(");
+            }
+
             builder.Append("            ").Append(CSharpNames.Literal(source.Sql)).AppendLine(",");
             builder.AppendLine("            static (command, parameters) =>");
             builder.AppendLine("            {");
@@ -561,36 +575,48 @@ internal static class GeneratedSourceWriter
                 builder.AppendLine(");");
             }
 
-            builder.AppendLine("            },");
-            builder.AppendLine("            static reader =>");
-            builder.AppendLine("            {");
-            if (resultMapping == null)
+            if (isCommand)
             {
-                builder.Append("                return new ").Append(resultName).AppendLine("(");
-                for (var index = 0; index < analysis.Columns.Count; index++)
-                {
-                    builder.Append("                    ").Append(environment.ReadExpression(
-                        analysis.Columns[index].ClrType,
-                        index,
-                        source.Name + "." + analysis.Columns[index].Name));
-                    builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
-                }
+                builder.AppendLine("            });");
+                builder.AppendLine();
+
+                builder.Append("    public static global::System.Threading.Tasks.Task<int> ")
+                    .Append(queryName).AppendLine("Async(");
             }
             else
             {
-                builder.Append("                return ")
-                    .Append(ResultMappingFactory.MaterializeExpression(
-                        resultMapping,
-                        environment,
-                        source.Name))
-                    .AppendLine(";");
+                builder.AppendLine("            },");
+                builder.AppendLine("            static reader =>");
+                builder.AppendLine("            {");
+                if (resultMapping == null)
+                {
+                    builder.Append("                return new ").Append(resultName).AppendLine("(");
+                    for (var index = 0; index < analysis.Columns.Count; index++)
+                    {
+                        builder.Append("                    ").Append(environment.ReadExpression(
+                            analysis.Columns[index].ClrType,
+                            index,
+                            source.Name + "." + analysis.Columns[index].Name));
+                        builder.AppendLine(index == analysis.Columns.Count - 1 ? ");" : ",");
+                    }
+                }
+                else
+                {
+                    builder.Append("                return ")
+                        .Append(ResultMappingFactory.MaterializeExpression(
+                            resultMapping,
+                            environment,
+                            source.Name))
+                        .AppendLine(";");
+                }
+
+                builder.AppendLine("            });");
+                builder.AppendLine();
+
+                builder.Append("    public static global::System.Threading.Tasks.Task<global::System.Collections.Generic.IReadOnlyList<")
+                    .Append(resultName).Append(">> ").Append(queryName).AppendLine("Async(");
             }
 
-            builder.AppendLine("            });");
-            builder.AppendLine();
-
-            builder.Append("    public static global::System.Threading.Tasks.Task<global::System.Collections.Generic.IReadOnlyList<")
-                .Append(resultName).Append(">> ").Append(queryName).AppendLine("Async(");
             builder.AppendLine("        global::System.Data.Common.DbConnection connection,");
             for (var index = 0; index < analysis.Parameters.Count; index++)
             {
@@ -602,7 +628,9 @@ internal static class GeneratedSourceWriter
             builder.AppendLine("        global::System.Data.Common.DbTransaction? transaction = null,");
             builder.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
             builder.AppendLine("    {");
-            builder.Append("        return global::CobaltumOrm.CobaltumQueryExtensions.Query(connection, ")
+            builder.Append("        return global::CobaltumOrm.CobaltumQueryExtensions.")
+                .Append(isCommand ? "ExecuteAsync" : "Query")
+                .Append("(connection, ")
                 .Append(queryName).Append(", new ").Append(parametersName);
             if (analysis.Parameters.Count == 0)
             {

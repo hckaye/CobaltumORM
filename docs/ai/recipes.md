@@ -134,6 +134,29 @@ public static Task<IReadOnlyList<UserDirectory.ByEmailResult>> ReadByEmailAsync(
 
 Use `[Query<T>(name, sql)]` to map onto an existing result type instead of generating one.
 
+A statement that does not return rows, such as an `INSERT`, `UPDATE`, `DELETE`, or `TRUNCATE`
+without `RETURNING`, generates a command instead of a result record. The async method returns the
+affected row count. `[Query<T>]` still requires a statement that returns rows.
+
+<!-- snippet: named-command -->
+```csharp
+[Query(
+    "DeleteByEmail",
+    "DELETE FROM app.users WHERE email = @email")]
+public static partial class UserDirectory
+{
+}
+```
+
+<!-- snippet: named-command-call -->
+```csharp
+public static Task<int> DeleteByEmailAsync(
+    DbConnection connection,
+    string email,
+    CancellationToken cancellationToken = default) =>
+    UserDirectory.DeleteByEmailAsync(connection, email, cancellationToken: cancellationToken);
+```
+
 ## Pass a value inside interpolated SQL
 
 An interpolation hole is replaced by a `DbParameter`, never by SQL text. Only value positions

@@ -77,6 +77,35 @@ public sealed class RawQueryRuntimeTests
     }
 
     [Fact]
+    public async Task CommandDefinitionBindsParametersAndReturnsAffectedCount()
+    {
+        using var cancellationSource = new CancellationTokenSource();
+        var connection = new QueryFakeDbConnection();
+        const string sql = "UPDATE users SET name = @name WHERE id = @id";
+        var definition = new CobaltumCommandDefinition<(int Id, string? Name)>(
+            sql,
+            (command, parameters) =>
+            {
+                CobaltumParameter.Add(command, "@name", parameters.Name, DbType.String);
+                CobaltumParameter.Add(command, "@id", parameters.Id, DbType.Int32);
+            });
+
+        var affected = await connection.ExecuteAsync(definition, (42, null), null, cancellationSource.Token);
+
+        Assert.Equal(1, affected);
+        Assert.Equal(sql, definition.Sql);
+        var command = Assert.Single(connection.Commands);
+        Assert.Equal(sql, command.CommandText);
+        Assert.Equal(DBNull.Value, command.ParameterValues["@name"].Value);
+        Assert.Equal(DbType.String, command.ParameterValues["@name"].DbType);
+        Assert.Equal(42, command.ParameterValues["@id"].Value);
+        Assert.Equal(cancellationSource.Token, command.CancellationTokenSeen);
+        Assert.True(command.WasDisposed);
+        Assert.Equal(1, connection.CloseCount);
+        Assert.Equal(ConnectionState.Closed, connection.State);
+    }
+
+    [Fact]
     public async Task ClosesAConnectionWhenOpeningChangesStateAndThenFails()
     {
         var connection = new QueryFakeDbConnection

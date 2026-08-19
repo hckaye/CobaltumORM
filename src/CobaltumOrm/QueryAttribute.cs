@@ -5,6 +5,10 @@ namespace CobaltumOrm;
 /// <summary>
 /// Declares a named SQL query on a class. The attribute may be repeated across
 /// declarations of a partial class so a generator can collect multiple queries.
+/// A statement that returns rows generates a result record and an async method that
+/// materializes rows. An INSERT, UPDATE, DELETE, or TRUNCATE statement that does not
+/// return rows generates a command definition and an async method that returns the
+/// affected row count.
 /// </summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
 public sealed class QueryAttribute : Attribute

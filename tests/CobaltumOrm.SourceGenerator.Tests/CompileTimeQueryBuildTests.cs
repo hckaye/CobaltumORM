@@ -860,6 +860,8 @@ public sealed class CompileTimeQueryBuildTests
         Assert.False(result.Succeeded, result.Output);
         Assert.Contains("COB109", result.Output, StringComparison.Ordinal);
         Assert.Contains("cannot be mapped", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("returned column 'id' has CLR type 'int'", result.Output, StringComparison.Ordinal);
+        Assert.Contains("parameter 'Id' of type 'string'", result.Output, StringComparison.Ordinal);
     }
 
     [Fact]

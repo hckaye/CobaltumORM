@@ -48,6 +48,7 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 - C# migrations and Flyway-compatible SQL build the schema without connecting to a database.
 - `Query("...")` and `[Query(...)]` SQL is analyzed at build time. Supported SQL is checked for syntax and references to existing schemas, tables, and columns.
 - A statement that returns rows can generate a result type or map to a type supplied through `Query<T>` or `[Query<T>]`.
+- An INSERT, UPDATE, DELETE, or TRUNCATE without RETURNING can be named with `[Query]`. The generated method returns the affected row count.
 - Renaming or deleting a schema object in a migration makes old `SqlSchema` references and SQL that uses the old name fail to compile.
   - The current checker supports part of the PostgreSQL syntax used for CRUD operations. It cannot check permissions, constraints, triggers, or outcomes that depend on stored data.
 - CobaltumORM does not provide EF Core-style change tracking or an equivalent to `SaveChanges`. Queries and commands are executed explicitly.
@@ -197,7 +198,7 @@ The CLI creates the class, attribute, version, and empty `Up` and `Down` methods
 
 ### 4. Connect the Query project to the migrations
 
-Replace `src/MyApp/MyApp.csproj` with the following project definition. `CobaltumOrmMigrationProjectReference` makes the Query build read migrations from the separate executable project for SQL checking and code generation.
+Replace `src/MyApp/MyApp.csproj` with the following project definition. `CobaltumOrmMigrationProjectReference` makes the Query build read migrations from the separate executable project for SQL checking and code generation. It also references the migration assembly, so runtime types such as `CobaltumMigrationCatalog` are available to the application. Give the Query project its own generated namespace, because the migration project generates the same type names in its own namespace.
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -206,7 +207,7 @@ Replace `src/MyApp/MyApp.csproj` with the following project definition. `Cobaltu
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <CobaltumOrmGeneratedNamespace>MyApp.Database</CobaltumOrmGeneratedNamespace>
+    <CobaltumOrmGeneratedNamespace>MyApp.Generated</CobaltumOrmGeneratedNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -570,19 +571,9 @@ Add the migration project as a CobaltumORM migration input in each project that 
 </ItemGroup>
 ```
 
-The Query project reads `Migrations/**/*.cs` and `Migrations/V*__*.sql` from that project at build time. `SqlSchema`, `Tables`, generated row records, named Query definitions, and direct `Query(...)` checks use the same ordered migrations as the CLI. A normal `ProjectReference` to the migration executable is not required when only schema generation is needed. Set `CobaltumOrmGeneratedNamespace` in the Query project when the generated types should use an application-specific namespace.
+The Query project reads `Migrations/**/*.cs` and `Migrations/V*__*.sql` from that project at build time. `SqlSchema`, `Tables`, generated row records, named Query definitions, and direct `Query(...)` checks use the same ordered migrations as the CLI. Set `CobaltumOrmGeneratedNamespace` in the Query project when the generated types should use an application-specific namespace.
 
-When the Query application should also use the connection defined by the migration project, add both references:
-
-```xml
-<ItemGroup>
-  <ProjectReference Include="../MyApp.Database/MyApp.Database.csproj" />
-  <CobaltumOrmMigrationProjectReference
-      Include="../MyApp.Database/MyApp.Database.csproj" />
-</ItemGroup>
-```
-
-The application can then create a connection without reading a raw environment variable or repeating its configuration key:
+The reference also references the migration assembly, so the migration project's `CobaltumMigrationCatalog` and `MigrationProject` types are available at runtime. The application can then create a connection without reading a raw environment variable or repeating its configuration key:
 
 ```csharp
 using CobaltumOrm.Migrations;
@@ -678,7 +669,7 @@ src/
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
-    <CobaltumOrmGeneratedNamespace>MyApp.Database</CobaltumOrmGeneratedNamespace>
+    <CobaltumOrmGeneratedNamespace>MyApp.Queries.Generated</CobaltumOrmGeneratedNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -815,6 +806,8 @@ Only names in the current schema get `SqlSchema` members. If a migration renames
 SQL with names written directly, such as `"SELECT id FROM accounts.users"`, is also checked at build time. Supported SQL is parsed and checked against the schema after all migrations are applied. Missing schemas, tables, columns, and syntax errors produce a compile error with `COB004` and an SQL error code.
 
 Each query generates a result type such as `ByIdResult`, a parameter type such as `ByIdParameters`, a typed query definition such as `ById`, and an async method such as `ByIdAsync`.
+
+A statement that does not return rows, such as an INSERT, UPDATE, DELETE, or TRUNCATE without RETURNING, generates a command instead: a parameter type, a `CobaltumCommandDefinition`, and an async method that returns the affected row count. `[Query<TResult>]` requires a statement that returns rows.
 
 Use `[Query<TResult>]` to use an existing result type. The parameter type, query definition, and async method are still generated, but `TResult` is not generated.
 

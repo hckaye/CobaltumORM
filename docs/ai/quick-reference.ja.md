@@ -21,6 +21,7 @@ SQL は手で書きます。ビルドがそれを解析し、マイグレーシ�
 | 既存の型へ行をマッピングする場合 | `connection.Query<T>(sql)` | `T` |
 | 同じ SQL を複数箇所で使う場合 | `partial class` への `[Query("Name", sql)]` | 生成される `NameResult` |
 | 名前付きクエリを既存の型へマッピングする場合 | `[Query<T>("Name", sql)]` | `T` |
+| RETURNING を含まない INSERT、UPDATE、DELETE、TRUNCATE に名前を付ける場合 | `partial class` への `[Query("Name", sql)]` | 影響を受けた行数 |
 | SQL の文字列が実行時にしか決まらない、または解析対象外の構文を使う場合 | `connection.NoCheckQuery(sql)` | `CobaltumRawRow` |
 | 検査しない SQL を既存の型へマッピングする場合 | `connection.NoCheckQuery<T>(sql)` | `T` |
 | 1 つのテーブルを任意の条件で絞り込む場合 | `Tables.<Table>.Query().Where(...)` | 生成されるテーブルの `record` |
@@ -36,6 +37,9 @@ SQL は手で書きます。ビルドがそれを解析し、マイグレーシ�
 - 補間文字列の `INSERT`、`UPDATE`、`DELETE` は `Query` では受け付けません。固定 SQL と
   `WithParameter` を使います。
 - 行を返す検査対象の `Query` に書ける文はちょうど 1 つです。
+- `[Query]` に書ける文は SELECT、INSERT、UPDATE、DELETE、TRUNCATE のいずれか 1 つです。行を返さない
+  文はコマンドとして生成され、非同期メソッドは影響を受けた行数を返します。`[Query<T>]` は行を返す
+  文が必要です。
 - `Query` の中の DDL は拒否されます。スキーマ変更はマイグレーションに書きます。
 - `WithParameter` に渡した名前と型は、解析した SQL と照合されます。
 - `Query<T>` は返る列名、CLR 型、null 許容性を `T` のコンストラクターまたは書き込み可能なメンバーと
@@ -74,9 +78,9 @@ SQL は手で書きます。ビルドがそれを解析し、マイグレーシ�
 | `Tables.<Table>` | `Query()`、`All()`、`Where(...)` を持つテーブルオブジェクト |
 | `Tables.<Table>.<Column>` | `Equal(value)` を持つ型付きの列 |
 | `<Container>.<Name>Result` | 名前付きクエリの結果 `record` |
-| `<Container>.<Name>Parameters` | 名前付きクエリのパラメーター `record` |
-| `<Container>.<Name>` | `CobaltumQueryDefinition<TParameters, TResult>` |
-| `<Container>.<Name>Async` | 接続と各パラメーターを受け取る非同期メソッド |
+| `<Container>.<Name>Parameters` | 名前付きクエリ・コマンドのパラメーター `record` |
+| `<Container>.<Name>` | 行を返すクエリでは `CobaltumQueryDefinition<TParameters, TResult>`、コマンドでは `CobaltumCommandDefinition<TParameters>` |
+| `<Container>.<Name>Async` | 接続と各パラメーターを受け取る非同期メソッド。コマンドでは影響を受けた行数を返す |
 | `CobaltumMigrationCatalog.All` | 順序どおりのマイグレーション一覧。実行時のアセンブリ走査は不要 |
 
 `SqlSchema` には現在のスキーマに存在する名前だけが入ります。マイグレーションで列名を変えると古い

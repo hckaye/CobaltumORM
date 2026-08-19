@@ -45,6 +45,7 @@ public sealed class ExternalMigrationProjectBuildTests
             File.WriteAllText(
                 Path.Combine(migrations.FullName, "V2__add_name.sql"),
                 "ALTER TABLE users ADD COLUMN name text NOT NULL;");
+            File.WriteAllText(Path.Combine(migrationDirectory.FullName, "Program.cs"), "return 0;\n");
 
             var targets = Escape(Path.Combine(
                 repository,
@@ -72,6 +73,7 @@ public sealed class ExternalMigrationProjectBuildTests
                     <TargetFramework>net10.0</TargetFramework>
                     <RootNamespace>Example.Database.Migrations</RootNamespace>
                     <CobaltumOrmMigrationProject>true</CobaltumOrmMigrationProject>
+                    <CobaltumOrmGeneratedNamespace>Example.Database.Migrations.Generated</CobaltumOrmGeneratedNamespace>
                   </PropertyGroup>
                   <ItemGroup>
                     <ProjectReference Include="{{migrationsProject}}" />
@@ -98,6 +100,9 @@ public sealed class ExternalMigrationProjectBuildTests
                     public static UsersRow UseGeneratedRow(UsersRow row) => row;
 
                     public static string GeneratedTableName => SqlSchema.Tables.Users.Name;
+
+                    // CobaltumOrmMigrationProjectReference also references the migration assembly.
+                    public static System.Type MigrationType => typeof(Example.Database.Migrations.CreateUsersMigration);
                 }
                 """);
 

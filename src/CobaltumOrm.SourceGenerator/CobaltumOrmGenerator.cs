@@ -109,13 +109,15 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
             var meaningful = statements
                 .Where(statement => statement.Kind != SqlStatementKind.Empty)
                 .ToArray();
-            if (meaningful.Length != 1 || meaningful[0].Kind != SqlStatementKind.Select)
+            if (meaningful.Length != 1 ||
+                (meaningful[0].Kind != SqlStatementKind.Select &&
+                 meaningful[0].Kind != SqlStatementKind.DataManipulation))
             {
                 Report(RoslynDiagnostic.Create(
                     GeneratorDiagnostics.QuerySql,
                     query.Location,
                     "SQL300",
-                    "Query attribute must contain exactly one statement that returns rows."));
+                    "Query attribute must contain exactly one SELECT, INSERT, UPDATE, DELETE, or TRUNCATE statement."));
                 continue;
             }
 
@@ -131,6 +133,16 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
 
             if (!analysis.HasErrors)
             {
+                if (analysis.Columns.Count == 0 && query.ResultType != null)
+                {
+                    Report(RoslynDiagnostic.Create(
+                        GeneratorDiagnostics.ResultMapping,
+                        query.Location,
+                        "a statement that does not return rows cannot be mapped to a result type. " +
+                        "Use the non-generic Query attribute to execute it and get the affected row count."));
+                    continue;
+                }
+
                 if (query.ResultType != null &&
                     !ResultMappingFactory.TryCreate(
                         compilation,

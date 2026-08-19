@@ -371,17 +371,29 @@ internal static class ResultMappingFactory
         }
 
         var matchingConstructors = new List<IReadOnlyList<ResultMappingTarget>>();
+        var constructorNotes = new List<string>();
         foreach (var constructor in namedResult.InstanceConstructors)
         {
-            if (constructor.IsStatic || constructor.Parameters.Length != analysis.Columns.Count ||
-                !compilation.IsSymbolAccessibleWithin(constructor, compilation.Assembly))
+            if (constructor.IsStatic ||
+                !compilation.IsSymbolAccessibleWithin(constructor, compilation.Assembly) ||
+                (constructor.Parameters.Length == 1 &&
+                 SymbolEqualityComparer.Default.Equals(constructor.Parameters[0].Type, resultType)))
             {
+                continue;
+            }
+
+            var signature = DescribeConstructor(constructor);
+            if (constructor.Parameters.Length != analysis.Columns.Count)
+            {
+                constructorNotes.Add(
+                    $"constructor ({signature}) takes {constructor.Parameters.Length} parameter(s), " +
+                    $"but the query returns {analysis.Columns.Count} column(s)");
                 continue;
             }
 
             var targets = new List<ResultMappingTarget>();
             var usedColumnOrdinals = new HashSet<int>();
-            var valid = true;
+            string? mismatch = null;
             foreach (var parameter in constructor.Parameters)
             {
                 if (!TryGetTargetOptions(
@@ -396,11 +408,27 @@ internal static class ResultMappingFactory
                     return false;
                 }
 
-                if (!columnsByName.TryGetValue(NormalizeName(columnName), out var columnOrdinal) ||
-                    !usedColumnOrdinals.Add(columnOrdinal) ||
-                    !TryResolveColumnType(csharpCompilation, analysis.Columns[columnOrdinal].ClrType, out var sourceType))
+                if (!columnsByName.TryGetValue(NormalizeName(columnName), out var columnOrdinal))
                 {
-                    valid = false;
+                    mismatch = $"parameter '{parameter.Name}' expects a column named '{columnName}', " +
+                        "but no such column is returned";
+                    break;
+                }
+
+                if (!usedColumnOrdinals.Add(columnOrdinal))
+                {
+                    mismatch = $"parameter '{parameter.Name}' matches column " +
+                        $"'{analysis.Columns[columnOrdinal].Name}', which another parameter already uses";
+                    break;
+                }
+
+                if (!TryResolveColumnType(
+                        csharpCompilation,
+                        analysis.Columns[columnOrdinal].ClrType,
+                        out var sourceType))
+                {
+                    mismatch = $"returned column '{analysis.Columns[columnOrdinal].Name}' has CLR type " +
+                        $"'{ColumnDisplay(analysis.Columns[columnOrdinal].ClrType)}', which cannot be resolved";
                     break;
                 }
 
@@ -409,7 +437,9 @@ internal static class ResultMappingFactory
                 {
                     if (!IsCompatible(csharpCompilation, sourceType!, parameter.Type))
                     {
-                        valid = false;
+                        mismatch = $"returned column '{analysis.Columns[columnOrdinal].Name}' has CLR type " +
+                            $"'{ColumnDisplay(analysis.Columns[columnOrdinal].ClrType)}', which cannot be assigned to " +
+                            $"parameter '{parameter.Name}' of type '{Display(parameter.Type)}'";
                         break;
                     }
                 }
@@ -432,9 +462,13 @@ internal static class ResultMappingFactory
                     valueHandler));
             }
 
-            if (valid)
+            if (mismatch is null)
             {
                 matchingConstructors.Add(targets);
+            }
+            else
+            {
+                constructorNotes.Add($"constructor ({signature}): {mismatch}");
             }
         }
 
@@ -455,6 +489,11 @@ internal static class ResultMappingFactory
         if (!canCreateWithInitializer)
         {
             error = $"result type '{Display(resultType)}' has no accessible constructor matching all returned columns";
+            if (constructorNotes.Count != 0)
+            {
+                error += ": " + string.Join("; ", constructorNotes);
+            }
+
             return false;
         }
 
@@ -655,6 +694,10 @@ internal static class ResultMappingFactory
 
     internal static string Display(ITypeSymbol type) =>
         type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+
+    private static string DescribeConstructor(IMethodSymbol constructor) =>
+        string.Join(", ", constructor.Parameters.Select(parameter =>
+            parameter.Type.ToDisplayString() + " " + parameter.Name));
 
     private static string HandlerInstance(ITypeSymbol handlerType) =>
         "global::CobaltumOrm.CobaltumHandlerCache<" + Display(handlerType) + ">.Instance";

@@ -39,6 +39,34 @@ public sealed class CobaltumQueryDefinition<TParameters, TResult>
     internal TResult Materialize(DbDataReader reader) => _materialize(reader);
 }
 
+/// <summary>
+/// A generated, strongly typed command with an explicit parameter record. Commands execute
+/// statements that do not return rows and report the affected row count.
+/// </summary>
+public sealed class CobaltumCommandDefinition<TParameters>
+{
+    private readonly Action<DbCommand, TParameters> _bind;
+
+    /// <summary>Initializes a command definition. This constructor is primarily intended for generated code.</summary>
+    public CobaltumCommandDefinition(
+        string sql,
+        Action<DbCommand, TParameters> bind)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            throw new ArgumentException("SQL text is required.", nameof(sql));
+        }
+
+        Sql = sql;
+        _bind = bind ?? throw new ArgumentNullException(nameof(bind));
+    }
+
+    /// <summary>Gets the validated SQL text.</summary>
+    public string Sql { get; }
+
+    internal void Bind(DbCommand command, TParameters parameters) => _bind(command, parameters);
+}
+
 /// <summary>A generated, strongly typed query whose values are already bound.</summary>
 public sealed class CobaltumQueryDefinition<TResult>
 {
@@ -867,6 +895,47 @@ public static class CobaltumQueryExtensions
             query,
             transaction,
             expectedParameters ?? Array.Empty<CobaltumExpectedParameter>());
+    }
+
+    /// <summary>
+    /// Executes a generated command and returns the affected row count. A closed connection
+    /// is opened asynchronously and closed again; an already-open connection remains open.
+    /// </summary>
+    public static async Task<int> ExecuteAsync<TParameters>(
+        this DbConnection connection,
+        CobaltumCommandDefinition<TParameters> command,
+        TParameters parameters,
+        DbTransaction? transaction = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (connection is null)
+        {
+            throw new ArgumentNullException(nameof(connection));
+        }
+
+        if (command is null)
+        {
+            throw new ArgumentNullException(nameof(command));
+        }
+
+        var closeWhenFinished = await CobaltumConnection.OpenIfNeededAsync(
+            connection,
+            transaction,
+            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using (var dbCommand = connection.CreateCommand())
+            {
+                dbCommand.CommandText = command.Sql;
+                dbCommand.Transaction = transaction;
+                command.Bind(dbCommand, parameters);
+                return await dbCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            CobaltumConnection.CloseIfOpened(connection, closeWhenFinished);
+        }
     }
 
     /// <summary>

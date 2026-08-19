@@ -59,9 +59,9 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
         Assert.Contains("dotnet build <project>", instructions, StringComparison.Ordinal);
         Assert.Contains("Do not access a database or run migrations unless the user requests it", instructions, StringComparison.Ordinal);
 
-        var inspect = await fixture.RunToolAsync("inspect", "--project", fixture.ApplicationProjectPath, "--format", "json");
-        var secondInspect = await fixture.RunToolAsync("inspect", "--project", fixture.ApplicationProjectPath, "--format", "json");
-        var doctor = await fixture.RunToolAsync("doctor", "--project", fixture.ApplicationProjectPath, "--format", "json");
+        var inspect = await fixture.RunToolAsync("inspect", "--project", fixture.ApplicationProjectPath, "--format", "json", "--no-restore");
+        var secondInspect = await fixture.RunToolAsync("inspect", "--project", fixture.ApplicationProjectPath, "--format", "json", "--no-restore");
+        var doctor = await fixture.RunToolAsync("doctor", "--project", fixture.ApplicationProjectPath, "--format", "json", "--no-restore");
         Assert.Equal(0, inspect.ExitCode);
         Assert.Equal(0, secondInspect.ExitCode);
         Assert.Equal(inspect.Output, secondInspect.Output);
@@ -71,7 +71,7 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
         {
             var root = document.RootElement;
             Assert.Equal("PostgreSql", root.GetProperty("databaseProvider").GetString());
-            Assert.Equal("Scenario.Migrations", root.GetProperty("generatedNamespace").GetString());
+            Assert.Equal("Scenario.App.Generated", root.GetProperty("generatedNamespace").GetString());
             Assert.Contains(
                 root.GetProperty("migrationProjectReferencePaths").EnumerateArray().Select(item => item.GetString()),
                 path => string.Equals(path, fixture.MigrationProjectPath, StringComparison.Ordinal));
@@ -89,7 +89,7 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
         }
 
         var build = fixture.Build();
-        Assert.Equal(0, build.ExitCode);
+        Assert.True(build.ExitCode == 0, build.Output);
         Assert.Contains("Scenario.App ->", build.Output, StringComparison.Ordinal);
         await AssertMcpSurfaceAsync(fixture);
         AssertPublishedSafetyGuidance();
@@ -196,7 +196,7 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
         Assert.False(doctor.IsError is true);
         Assert.False(list.IsError is true);
         Assert.Equal("PostgreSql", inspect.StructuredContent!.Value.GetProperty("databaseProvider").GetString());
-        Assert.Equal("Scenario.Migrations", inspect.StructuredContent.Value.GetProperty("generatedNamespace").GetString());
+        Assert.Equal("Scenario.App.Generated", inspect.StructuredContent.Value.GetProperty("generatedNamespace").GetString());
         Assert.Equal("ok", doctor.StructuredContent!.Value.GetProperty("status").GetString());
 
         var artifactName = list.StructuredContent!.Value.GetProperty("artifacts").EnumerateArray()
@@ -241,12 +241,17 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
         using CobaltumOrm;
 
         [Query("FindUserById", "SELECT id, name FROM users WHERE id = @id")]
+        [Query("DeleteUser", "DELETE FROM users WHERE id = @id")]
         public static partial class AgentQueries
         {
         }
 
         public static class AgentScenario
         {
+            // The migration project reference makes the migration assembly available at runtime.
+            public static int MigrationCount =>
+                global::Scenario.App.Generated.CobaltumMigrationCatalog.All.Count;
+
             public static async Task<string> Read(DbConnection connection, int id)
             {
                 var named = await AgentQueries.FindUserByIdAsync(connection, id);
@@ -256,6 +261,9 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
                     .ReadAsync();
                 return named[0].Name + parameterized[0].Name;
             }
+
+            public static Task<int> Delete(DbConnection connection, int id) =>
+                AgentQueries.DeleteUserAsync(connection, id);
         }
         """;
 
@@ -437,7 +445,19 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
         yield return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
     }
 
-    private static DotnetResult RunDotnet(string workingDirectory, params string[] arguments)
+    private static DotnetResult RunDotnet(string workingDirectory, params string[] arguments) =>
+        RunDotnetCore(workingDirectory, null, arguments);
+
+    private static DotnetResult RunDotnetWithPackages(
+        string workingDirectory,
+        string packagesDirectory,
+        params string[] arguments) =>
+        RunDotnetCore(workingDirectory, packagesDirectory, arguments);
+
+    private static DotnetResult RunDotnetCore(
+        string workingDirectory,
+        string? packagesDirectory,
+        string[] arguments)
     {
         var startInfo = new ProcessStartInfo("dotnet")
         {
@@ -449,6 +469,10 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
         };
         startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         startInfo.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0";
+        if (packagesDirectory is not null)
+        {
+            startInfo.Environment["NUGET_PACKAGES"] = packagesDirectory;
+        }
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
@@ -499,6 +523,9 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(MigrationProjectPath)!);
             File.WriteAllText(SourcePath, source);
             File.WriteAllText(MigrationProjectPath, MigrationProject(_packageFeed.CobaltumVersion));
+            File.WriteAllText(
+                System.IO.Path.Combine(System.IO.Path.GetDirectoryName(MigrationProjectPath)!, "Program.cs"),
+                "return 0;\n");
             Directory.CreateDirectory(System.IO.Path.Combine(System.IO.Path.GetDirectoryName(MigrationProjectPath)!, "Migrations"));
             File.WriteAllText(
                 System.IO.Path.Combine(System.IO.Path.GetDirectoryName(MigrationProjectPath)!, "Migrations", "CreateUsers.cs"),
@@ -555,23 +582,37 @@ public sealed class CodingAgentScenarioTests : IClassFixture<CodingAgentScenario
 
         public DotnetResult Restore()
         {
-            var migration = RunDotnet(
+            var migration = RunDotnetWithPackages(
                 Root,
+                PackagesDirectory,
                 "restore", MigrationProjectPath, "--source", _packageFeed.Path, "--disable-parallel", "--nologo");
             if (migration.ExitCode != 0)
             {
                 return migration;
             }
 
-            return RunDotnet(
+            return RunDotnetWithPackages(
                 Root,
+                PackagesDirectory,
                 "restore", ApplicationProjectPath, "--source", _packageFeed.Path, "--disable-parallel", "--nologo");
         }
 
-        public DotnetResult Build() => RunDotnet(Root, "build", ApplicationProjectPath, "--no-restore", "--nologo");
+        public DotnetResult Build() =>
+            RunDotnetWithPackages(Root, PackagesDirectory, "build", ApplicationProjectPath, "--no-restore", "--nologo");
+
+        // The feed repacks the same CobaltumORM version on every run, so an isolated packages
+        // directory keeps restore from reusing an older package layout cached on this machine.
+        private string PackagesDirectory =>
+            System.IO.Path.Combine(Root, ".nuget-packages");
 
         public void Dispose()
         {
+            if (Environment.GetEnvironmentVariable("COBALTUM_KEEP_SCENARIO") == "1")
+            {
+                Console.Error.WriteLine($"Scenario kept at {Root}");
+                return;
+            }
+
             try
             {
                 Directory.Delete(Root, recursive: true);

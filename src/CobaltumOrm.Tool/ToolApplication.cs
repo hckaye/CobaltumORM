@@ -547,7 +547,7 @@ internal sealed class ToolApplication
         writer.WriteLine("  -m, --migration-project <path>");
         writer.WriteLine("                             Existing migration .csproj");
         writer.WriteLine("      --generated-namespace <ns>");
-        writer.WriteLine("                             Namespace for generated code (default: migration RootNamespace)");
+        writer.WriteLine("                             Namespace for generated code (default: application RootNamespace + .Generated)");
         writer.WriteLine("      --provider <name>      Provider for a newly created or manually configured migration project");
         writer.WriteLine("  -f, --framework <tfm>      Framework for a newly created migration project");
         writer.WriteLine("      --create-migration-project");

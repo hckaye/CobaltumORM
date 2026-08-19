@@ -33,7 +33,7 @@ public sealed class AddCommandTests
         Assert.Contains("<PackageReference Include=\"SQLitePCLRaw.bundle_e_sqlite3\" Version=\"2.1.12\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"SQLitePCLRaw.core\" Version=\"2.1.12\" />", project, StringComparison.Ordinal);
         Assert.Contains("<CobaltumOrmDatabaseProvider>Sqlite</CobaltumOrmDatabaseProvider>", project, StringComparison.Ordinal);
-        Assert.Contains("<CobaltumOrmGeneratedNamespace>Example.Database</CobaltumOrmGeneratedNamespace>", project, StringComparison.Ordinal);
+        Assert.Contains("<CobaltumOrmGeneratedNamespace>Example.App.Generated</CobaltumOrmGeneratedNamespace>", project, StringComparison.Ordinal);
         Assert.Contains("<CompilerVisibleProperty Include=\"CobaltumOrmGeneratedNamespace\" />", project, StringComparison.Ordinal);
         Assert.Contains("<CompilerVisibleProperty Include=\"CobaltumOrmDatabaseProvider\" />", project, StringComparison.Ordinal);
         Assert.Contains(
@@ -72,6 +72,78 @@ public sealed class AddCommandTests
         Assert.Contains("No changes needed", secondOutput.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("Updated", secondOutput.ToString(), StringComparison.Ordinal);
         Assert.Equal(string.Empty, secondError.ToString());
+    }
+
+    [Fact]
+    public async Task DefaultsTheGeneratedNamespaceToTheApplicationRootNamespace()
+    {
+        using var fixture = new AddFixture();
+        fixture.WriteApplication("Example.App");
+        var migration = fixture.WriteMigration("Example.Database", "PostgreSql");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await fixture.Application(output, error).RunAsync(
+            new[]
+            {
+                "add", "--project", fixture.ApplicationProject,
+                "--migration-project", migration,
+            },
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        var project = File.ReadAllText(fixture.ApplicationProject);
+        Assert.Contains("<CobaltumOrmGeneratedNamespace>Example.App.Generated</CobaltumOrmGeneratedNamespace>", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("<CobaltumOrmGeneratedNamespace>Example.Database</CobaltumOrmGeneratedNamespace>", project, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    [Fact]
+    public async Task FallsBackToTheProjectFileNameWhenRootNamespaceIsMissing()
+    {
+        using var fixture = new AddFixture();
+        fixture.WriteApplication(null);
+        var migration = fixture.WriteMigration("Example.Database", "PostgreSql");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await fixture.Application(output, error).RunAsync(
+            new[]
+            {
+                "add", "--project", fixture.ApplicationProject,
+                "--migration-project", migration,
+            },
+            CancellationToken.None);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(
+            "<CobaltumOrmGeneratedNamespace>Example.App.Generated</CobaltumOrmGeneratedNamespace>",
+            File.ReadAllText(fixture.ApplicationProject),
+            StringComparison.Ordinal);
+        Assert.Equal(string.Empty, error.ToString());
+    }
+
+    [Fact]
+    public async Task RejectsADefaultNamespaceThatCollidesWithTheMigrationProject()
+    {
+        using var fixture = new AddFixture();
+        fixture.WriteApplication("Example.Database");
+        var migration = fixture.WriteMigration("Example.Database", "PostgreSql");
+        var before = File.ReadAllBytes(fixture.ApplicationProject);
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await fixture.Application(output, error).RunAsync(
+            new[]
+            {
+                "add", "--project", fixture.ApplicationProject,
+                "--migration-project", migration,
+            },
+            CancellationToken.None);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("--generated-namespace", error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(before, File.ReadAllBytes(fixture.ApplicationProject));
     }
 
     [Fact]
@@ -700,11 +772,14 @@ public sealed class AddCommandTests
             return Path.Combine(directory, projectName + ".csproj");
         }
 
-        public void WriteApplication(string rootNamespace, string? generatedNamespace = null, string? packageVersion = null)
+        public void WriteApplication(string? rootNamespace, string? generatedNamespace = null, string? packageVersion = null)
         {
             var namespaceElement = generatedNamespace is null
                 ? string.Empty
                 : $"    <CobaltumOrmGeneratedNamespace>{generatedNamespace}</CobaltumOrmGeneratedNamespace>\n";
+            var rootElement = rootNamespace is null
+                ? string.Empty
+                : $"    <RootNamespace>{rootNamespace}</RootNamespace>\n";
             var packageElement = packageVersion is null
                 ? string.Empty
                 : $"    <PackageReference Include=\"CobaltumOrm\" Version=\"{packageVersion}\" />\n";
@@ -714,8 +789,7 @@ public sealed class AddCommandTests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
                     <TargetFramework>net10.0</TargetFramework>
-                    <RootNamespace>{rootNamespace}</RootNamespace>
-                {namespaceElement}  </PropertyGroup>
+                {rootElement}{namespaceElement}  </PropertyGroup>
                   <ItemGroup>
                     <Compile Include="Existing.cs" />
                     <PackageReference Include="Other.Package" Version="1.2.3" />

@@ -21,6 +21,7 @@ There is no change tracking and no `SaveChanges`. Every query and command is exe
 | The rows must map to a type that already exists | `connection.Query<T>(sql)` | `T` |
 | The same SQL is used in more than one place | `[Query("Name", sql)]` on a `partial class` | a generated `NameResult` |
 | A named query mapping to an existing type | `[Query<T>("Name", sql)]` | `T` |
+| A named INSERT, UPDATE, DELETE, or TRUNCATE without RETURNING | `[Query("Name", sql)]` on a `partial class` | the affected row count |
 | The SQL text is only known at runtime, or uses syntax the analyzer does not support | `connection.NoCheckQuery(sql)` | `CobaltumRawRow` |
 | Unchecked SQL mapped to an existing type | `connection.NoCheckQuery<T>(sql)` | `T` |
 | Selecting from one table with optional filters | `Tables.<Table>.Query().Where(...)` | the generated table record |
@@ -36,6 +37,9 @@ There is no change tracking and no `SaveChanges`. Every query and command is exe
 - Interpolated `INSERT`, `UPDATE`, and `DELETE` are not accepted by `Query`. Use constant SQL with
   `WithParameter`.
 - A checked `Query` that returns rows must contain exactly one statement.
+- `[Query]` accepts one SELECT, INSERT, UPDATE, DELETE, or TRUNCATE statement. A statement that
+  returns no rows generates a command whose async method returns the affected row count.
+  `[Query<T>]` requires a statement that returns rows.
 - DDL in a `Query` is rejected. Schema changes belong in migrations.
 - Names and types passed to `WithParameter` are compared with the parsed SQL.
 - `Query<T>` compares the returned column names, CLR types, and nullability with the constructor
@@ -75,9 +79,9 @@ The generator writes these types into `CobaltumOrmGeneratedNamespace`, which def
 | `Tables.<Table>` | table object with `Query()`, `All()`, and `Where(...)` |
 | `Tables.<Table>.<Column>` | typed column supporting `Equal(value)` |
 | `<Container>.<Name>Result` | result record for a named query |
-| `<Container>.<Name>Parameters` | parameter record for a named query |
-| `<Container>.<Name>` | `CobaltumQueryDefinition<TParameters, TResult>` |
-| `<Container>.<Name>Async` | async method taking the connection and each parameter |
+| `<Container>.<Name>Parameters` | parameter record for a named query or command |
+| `<Container>.<Name>` | `CobaltumQueryDefinition<TParameters, TResult>` for a row-returning query, `CobaltumCommandDefinition<TParameters>` for a command |
+| `<Container>.<Name>Async` | async method taking the connection and each parameter; returns the affected row count for a command |
 | `CobaltumMigrationCatalog.All` | the ordered migration list, built without assembly scanning |
 
 `SqlSchema` contains only names that exist in the current schema. Renaming a column in a migration

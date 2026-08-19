@@ -2,12 +2,28 @@
   <PropertyGroup>
     <CobaltumOrmDatabaseProvider Condition="'$(CobaltumOrmDatabaseProvider)' == ''">PostgreSql</CobaltumOrmDatabaseProvider>
     <CobaltumOrmAnalysisCache Condition="'$(CobaltumOrmAnalysisCache)' == ''">true</CobaltumOrmAnalysisCache>
+    <!-- Migration projects define migrations, not compile-time queries. Skip the
+         compiler transform targets so a migration project built as a ProjectReference
+         does not require the compiler task assembly. -->
+    <CobaltumOrmCompileTimeQueries Condition="'$(CobaltumOrmMigrationProject)' == 'true'">false</CobaltumOrmCompileTimeQueries>
   </PropertyGroup>
 
   <ItemGroup>
     <CompilerVisibleProperty Include="CobaltumOrmDatabaseProvider" />
     <CompilerVisibleProperty Include="CobaltumOrmAnalysisCache" />
     <CompilerVisibleProperty Include="_CobaltumOrmAnalysisCacheDirectory" />
+  </ItemGroup>
+
+  <!--
+    A migration project reference supplies migration inputs to the build and also references
+    the migration assembly, so runtime types such as CobaltumMigrationCatalog are available
+    to the application. The reference stays private to this project. A ProjectReference that
+    already points at the same project is not duplicated.
+  -->
+  <ItemGroup Condition="'@(CobaltumOrmMigrationProjectReference)' != ''">
+    <ProjectReference Include="@(CobaltumOrmMigrationProjectReference)"
+                      Exclude="@(ProjectReference)"
+                      PrivateAssets="all" />
   </ItemGroup>
 
   <PropertyGroup>

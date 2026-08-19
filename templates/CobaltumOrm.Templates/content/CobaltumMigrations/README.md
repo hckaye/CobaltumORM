@@ -32,7 +32,8 @@ dotnet publish -c Release -r <RID> -p:PublishAot=true
 ```
 
 To use these migrations for build-time Query checks and generated schema types, add this
-item to the Query project's `.csproj`:
+item to the Query project's `.csproj`. The item also references this project's assembly, so
+runtime types such as `CobaltumMigrationCatalog` are available to the Query project:
 
 ```xml
 <ItemGroup>

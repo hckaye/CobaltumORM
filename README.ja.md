@@ -46,6 +46,7 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 - C# マイグレーションと Flyway 互換 SQL から、データベースへ接続せずにビルド時点のスキーマを組み立てます。
 - `Query("...")` と `[Query(...)]` の SQL をビルド時に解析します。対応している SQL では、文法とスキーマ、テーブル、列の存在を検査します。
 - 結果行を返す文では、結果型を生成するか、`Query<T>` または `[Query<T>]` で指定した型へマッピングします。
+- RETURNING を含まない INSERT、UPDATE、DELETE、TRUNCATE には `[Query]` で名前を付けられます。生成されるメソッドは影響を受けた行数を返します。
 - マイグレーションで名前を変更または削除すると、古い `SqlSchema` 参照と古い名前を含む SQL はコンパイルエラーになります。現在のスキーマでは実行できない SQL をビルド時に検出します。
   - 現在の検査対象は、PostgreSQL の CRUD 操作に関わる一部の構文です。権限、制約、トリガー、実データに依存する成否はビルド時には検査できません。
 - EF Core の変更追跡や `SaveChanges` に相当する API は提供しません。クエリと更新処理は明示的に実行します。
@@ -195,7 +196,7 @@ CLI がクラス、属性、バージョン、空の `Up` と `Down` を生成�
 
 ### 4. Query プロジェクトからマイグレーションを参照する
 
-`src/MyApp/MyApp.csproj` を次の内容に置き換えます。`CobaltumOrmMigrationProjectReference` は、SQL の検査とコード生成のために、別の実行可能プロジェクトからマイグレーションを読み取る参照です。
+`src/MyApp/MyApp.csproj` を次の内容に置き換えます。`CobaltumOrmMigrationProjectReference` は、SQL の検査とコード生成のために、別の実行可能プロジェクトからマイグレーションを読み取る参照です。マイグレーションのアセンブリ参照も兼ねるため、`CobaltumMigrationCatalog` などの実行時の型をアプリケーションから使えます。マイグレーションプロジェクトも同じ型名を自身の namespace に生成するため、Query プロジェクトには専用の生成 namespace を割り当てます。
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -204,7 +205,7 @@ CLI がクラス、属性、バージョン、空の `Up` と `Down` を生成�
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <CobaltumOrmGeneratedNamespace>MyApp.Database</CobaltumOrmGeneratedNamespace>
+    <CobaltumOrmGeneratedNamespace>MyApp.Generated</CobaltumOrmGeneratedNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -568,19 +569,9 @@ Query を定義するプロジェクトや生成されたスキーマ型を使�
 </ItemGroup>
 ```
 
-Query プロジェクトのビルド時に、指定したプロジェクトの `Migrations/**/*.cs` と `Migrations/V*__*.sql` を読み込みます。CLI が実行するものと同じ順序のマイグレーションから、`SqlSchema`、`Tables`、生成する row の `record`、名前付き Query の定義を作り、直接書いた `Query(...)` も検査します。スキーマ生成だけが目的なら、マイグレーションの実行可能プロジェクトを通常の `ProjectReference` に追加する必要はありません。生成型をアプリケーション固有の namespace に置く場合は、Query プロジェクトで `CobaltumOrmGeneratedNamespace` を指定します。
+Query プロジェクトのビルド時に、指定したプロジェクトの `Migrations/**/*.cs` と `Migrations/V*__*.sql` を読み込みます。CLI が実行するものと同じ順序のマイグレーションから、`SqlSchema`、`Tables`、生成する row の `record`、名前付き Query の定義を作り、直接書いた `Query(...)` も検査します。生成型をアプリケーション固有の namespace に置く場合は、Query プロジェクトで `CobaltumOrmGeneratedNamespace` を指定します。
 
-Query を実行するアプリケーションから、マイグレーションプロジェクトで定義した接続も使う場合は、2 種類の参照を追加します。
-
-```xml
-<ItemGroup>
-  <ProjectReference Include="../MyApp.Database/MyApp.Database.csproj" />
-  <CobaltumOrmMigrationProjectReference
-      Include="../MyApp.Database/MyApp.Database.csproj" />
-</ItemGroup>
-```
-
-これで、接続文字列の環境変数や設定キーをアプリケーション側に書かずに接続を作成できます。
+この参照はマイグレーションのアセンブリ参照も兼ねるため、マイグレーションプロジェクトの `CobaltumMigrationCatalog` や `MigrationProject` を実行時にも使えます。接続文字列の環境変数や設定キーをアプリケーション側に書かずに接続を作成できます。
 
 ```csharp
 using CobaltumOrm.Migrations;
@@ -676,7 +667,7 @@ src/
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
-    <CobaltumOrmGeneratedNamespace>MyApp.Database</CobaltumOrmGeneratedNamespace>
+    <CobaltumOrmGeneratedNamespace>MyApp.Queries.Generated</CobaltumOrmGeneratedNamespace>
   </PropertyGroup>
 
   <ItemGroup>
@@ -813,6 +804,8 @@ public static partial class UserQueries
 `SqlSchema` を使わず、`"SELECT id FROM accounts.users"` のように名前を直接書いた SQL もコンパイル時の検査対象です。対応範囲内の SQL はパーサーで文法を確認し、マイグレーション適用後のスキーマと照合して、指定したスキーマ、テーブル、列が存在するかを確認します。存在しない名前や文法エラーは、`COB004` と SQL のエラーコードを伴うコンパイルエラーになります。
 
 各クエリから、結果型の `ByIdResult`、パラメーター型の `ByIdParameters`、型付きクエリ定義の `ById`、呼び出し用メソッドの `ByIdAsync` が生成されます。
+
+RETURNING を含まない INSERT、UPDATE、DELETE、TRUNCATE のように行を返さない文では、結果型の代わりにコマンドが生成されます。パラメーター型、`CobaltumCommandDefinition`、影響を受けた行数を返す呼び出し用メソッドが生成されます。`[Query<TResult>]` には行を返す文が必要です。
 
 既存の結果型を使う場合は `[Query<TResult>]` を指定します。パラメーター型、クエリ定義、呼び出し用メソッドは生成されますが、`TResult` は生成されません。
 

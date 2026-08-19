@@ -134,6 +134,29 @@ public static Task<IReadOnlyList<UserDirectory.ByEmailResult>> ReadByEmailAsync(
 
 結果型を生成せず既存の型へマッピングする場合は `[Query<T>(name, sql)]` を使います。
 
+`RETURNING` を含まない `INSERT`、`UPDATE`、`DELETE`、`TRUNCATE` のように行を返さない文では、結果
+`record` の代わりにコマンドが生成されます。非同期メソッドは影響を受けた行数を返します。
+`[Query<T>]` は引き続き行を返す文が必要です。
+
+<!-- snippet: named-command -->
+```csharp
+[Query(
+    "DeleteByEmail",
+    "DELETE FROM app.users WHERE email = @email")]
+public static partial class UserDirectory
+{
+}
+```
+
+<!-- snippet: named-command-call -->
+```csharp
+public static Task<int> DeleteByEmailAsync(
+    DbConnection connection,
+    string email,
+    CancellationToken cancellationToken = default) =>
+    UserDirectory.DeleteByEmailAsync(connection, email, cancellationToken: cancellationToken);
+```
+
 ## 補間文字列の中で値を渡す
 
 補間の穴は `DbParameter` に置き換えられ、SQL のテキストにはなりません。穴を書けるのは値の位置だけで、

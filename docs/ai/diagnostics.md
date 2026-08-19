@@ -106,10 +106,13 @@ Query result type cannot be mapped.
 
 The columns returned by the SQL cannot be mapped onto the type given to `[Query<T>]` or
 `Query<T>(sql)`. A column is missing, its CLR type or nullability does not match, or the statement
-does not return rows.
+does not return rows. When a constructor does not match, the message names the first unmatched
+parameter, the column it expects, and the CLR type involved.
 
 Align the constructor or writable members of the result type with the selected columns, or set
-explicit names with `[ResultColumn("column_name")]`.
+explicit names with `[ResultColumn("column_name")]`. To execute a statement that does not return
+rows through `[Query]`, remove the type argument and use the generated command, which returns the
+affected row count.
 
 ## Build transform diagnostics
 
@@ -204,8 +207,9 @@ Convert the value before passing it.
 A query result cannot be mapped to the specified type.
 
 `Query<T>` was applied to a statement that returns no rows, or the returned columns do not match
-the constructor or writable members of `T`. `NoCheckQuery<T>` reports the same code when the shape
-of `T` itself cannot be mapped.
+the constructor or writable members of `T`. When a constructor does not match, the message names
+the first unmatched parameter, the column it expects, and the CLR type involved.
+`NoCheckQuery<T>` reports the same code when the shape of `T` itself cannot be mapped.
 
 Align `T` with the selected columns, set explicit names with `[ResultColumn("column_name")]`, or
 select a statement that returns rows. This is the build-transform counterpart of

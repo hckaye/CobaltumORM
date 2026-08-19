@@ -22,6 +22,15 @@ public static partial class UserDirectory
 }
 // </snippet>
 
+// <snippet named-command>
+[Query(
+    "DeleteByEmail",
+    "DELETE FROM app.users WHERE email = @email")]
+public static partial class UserDirectory
+{
+}
+// </snippet>
+
 // <snippet result-type>
 public sealed record UserSummary(
     [ResultColumn("id")] int Id,
@@ -60,6 +69,14 @@ public static class AiGuideSamples
         string email,
         CancellationToken cancellationToken = default) =>
         UserDirectory.ByEmailAsync(connection, email, cancellationToken: cancellationToken);
+    // </snippet>
+
+    // <snippet named-command-call>
+    public static Task<int> DeleteByEmailAsync(
+        DbConnection connection,
+        string email,
+        CancellationToken cancellationToken = default) =>
+        UserDirectory.DeleteByEmailAsync(connection, email, cancellationToken: cancellationToken);
     // </snippet>
 
     // <snippet interpolated-query>

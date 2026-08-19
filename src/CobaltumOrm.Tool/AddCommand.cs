@@ -38,7 +38,8 @@ internal sealed class AddCommand
         var targetPackages = LoadNearestCentralPackages(projectPath);
         var migration = ReadMigrationProject(migrationProjectPath, options.CreateMigrationProject, targetPackages);
         var provider = ResolveProvider(project, migration, options);
-        var generatedNamespace = options.GeneratedNamespace ?? migration.RootNamespace;
+        var generatedNamespace = options.GeneratedNamespace ??
+            DefaultGeneratedNamespace(project, projectPath, migration);
         ValidateNamespace(generatedNamespace, "generated namespace");
         var targetUsesCentralManagement = UsesCentralPackageManagement(project, targetPackages);
         var cobaltumVersion = ResolveCobaltumVersion(
@@ -236,6 +237,7 @@ internal sealed class AddCommand
         var provider = ReadProvider(document);
         return MigrationProjectInput.ForExisting(
             definition.RootNamespace,
+            document.ReadOptionalProperty("CobaltumOrmGeneratedNamespace")?.Trim(),
             provider,
             document,
             packages,
@@ -273,6 +275,48 @@ internal sealed class AddCommand
     {
         var value = project.ReadOptionalProperty("CobaltumOrmDatabaseProvider");
         return value is null ? null : MigrationProviders.Normalize(value);
+    }
+
+    // The application gets its own namespace, not the migration project's. Sharing the
+    // migration project's namespace puts the application's generated Tables and row records
+    // next to the migration project's generated types, which makes their names ambiguous
+    // when the migration assembly is also referenced.
+    private static string DefaultGeneratedNamespace(
+        ProjectFile project,
+        string projectPath,
+        MigrationProjectInput migration)
+    {
+        var rootNamespace = project.ReadOptionalProperty("RootNamespace")?.Trim();
+        if (string.IsNullOrWhiteSpace(rootNamespace))
+        {
+            rootNamespace = SanitizeRootNamespace(Path.GetFileNameWithoutExtension(projectPath));
+        }
+
+        var candidate = rootNamespace + ".Generated";
+        var migrationGeneratedNamespace = migration.GeneratedNamespace ??
+            migration.RootNamespace + ".Generated";
+        if (string.Equals(candidate, migration.RootNamespace, StringComparison.Ordinal) ||
+            string.Equals(candidate, migrationGeneratedNamespace, StringComparison.Ordinal))
+        {
+            throw new ToolUsageException(
+                $"The default generated namespace '{candidate}' collides with the migration project. " +
+                "Pass --generated-namespace <namespace> to choose a different namespace.");
+        }
+
+        return candidate;
+    }
+
+    private static string SanitizeRootNamespace(string projectName)
+    {
+        var builder = new StringBuilder(projectName.Length);
+        foreach (var character in projectName)
+        {
+            builder.Append(char.IsLetterOrDigit(character) || character == '_' || character == '.'
+                ? character
+                : '_');
+        }
+
+        return builder.ToString();
     }
 
     internal static IReadOnlyList<PackageRequirement> ReadDriverPackages(
@@ -662,6 +706,7 @@ internal sealed class MigrationProjectInput
 {
     private MigrationProjectInput(
         string rootNamespace,
+        string? generatedNamespace,
         string? provider,
         ProjectFile? project,
         CentralPackageFile? packages,
@@ -670,6 +715,7 @@ internal sealed class MigrationProjectInput
         string? outputDirectory)
     {
         RootNamespace = rootNamespace;
+        GeneratedNamespace = generatedNamespace;
         Provider = provider;
         Project = project;
         Packages = packages;
@@ -679,6 +725,8 @@ internal sealed class MigrationProjectInput
     }
 
     public string RootNamespace { get; }
+
+    public string? GeneratedNamespace { get; }
 
     public string? Provider { get; }
 
@@ -721,11 +769,12 @@ internal sealed class MigrationProjectInput
 
     public static MigrationProjectInput ForExisting(
         string rootNamespace,
+        string? generatedNamespace,
         string? provider,
         ProjectFile project,
         CentralPackageFile? packages,
         bool usesCentralPackageManagement) =>
-        new(rootNamespace, provider, project, packages, usesCentralPackageManagement, null, null);
+        new(rootNamespace, generatedNamespace, provider, project, packages, usesCentralPackageManagement, null, null);
 
     public static MigrationProjectInput ForCreation(
         string projectName,
@@ -736,6 +785,7 @@ internal sealed class MigrationProjectInput
         ValidateProjectName(projectName);
         return new MigrationProjectInput(
             projectName,
+            projectName + ".Generated",
             null,
             null,
             packages,
