@@ -201,9 +201,9 @@ public sealed class RawQueryRuntimeTests
             _ => { },
             reader => reader.GetInt32(0));
 
-        var rows = await connection.Query(
-            definition,
-            cancellationToken: cancellationSource.Token);
+        var rows = await connection
+            .Query(definition)
+            .ReadAsync(cancellationSource.Token);
 
         Assert.Equal(9, Assert.Single(rows));
         Assert.Equal(cancellationSource.Token, Assert.Single(connection.OpenTokens));
@@ -328,6 +328,72 @@ public sealed class RawQueryRuntimeTests
     }
 
     [Fact]
+    public async Task DeleteWhereBuildsAParameterizedStatementAndReportsAffectedRows()
+    {
+        var table = new FilterTable();
+        var command = table.DeleteWhere(table.Name.Equal("alice"));
+
+        Assert.Equal(
+            "DELETE FROM \"users\" WHERE \"name\" = @__cobaltum_where_0",
+            command.Sql);
+
+        var connection = new QueryFakeDbConnection();
+        var affected = await connection.Query(command).ExecuteAsync();
+
+        Assert.Equal(1, affected);
+        var executed = Assert.Single(connection.Commands);
+        Assert.Equal("alice", executed.ParameterValues["@__cobaltum_where_0"].Value);
+        Assert.True(executed.WasDisposed);
+        Assert.Equal(1, connection.CloseCount);
+        Assert.Equal(ConnectionState.Closed, connection.State);
+    }
+
+    [Fact]
+    public void DeleteWhereRejectsATableEntryWithoutADeleteStatement()
+    {
+        var table = new SelectOnlyTable();
+
+        Assert.Throws<NotSupportedException>(() => table.DeleteWhere(table.Id.Equal(7)));
+    }
+
+    [Fact]
+    public void DeleteWhereRejectsAMissingPredicate()
+    {
+        var table = new FilterTable();
+
+        Assert.Throws<ArgumentNullException>(() => table.DeleteWhere(null!));
+    }
+
+    [Fact]
+    public void CommandDefinitionRequiresSqlAndABinder()
+    {
+        Assert.Throws<ArgumentException>(() => new CobaltumCommandDefinition("  ", static _ => { }));
+        Assert.Throws<ArgumentNullException>(() => new CobaltumCommandDefinition("DELETE FROM users", null!));
+    }
+
+    [Fact]
+    public async Task GeneratedCommandPassesItsTransactionAndCancellationTokenThrough()
+    {
+        var definition = new CobaltumCommandDefinition(
+            "DELETE FROM users WHERE id = @id",
+            static command => CobaltumParameter.Add(command, "@id", 7, DbType.Int32));
+        var connection = new QueryFakeDbConnection();
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+        using var cancellationSource = new CancellationTokenSource();
+
+        var affected = await connection
+            .Query(definition, transaction)
+            .ExecuteAsync(cancellationSource.Token);
+
+        Assert.Equal(1, affected);
+        var command = Assert.Single(connection.Commands);
+        Assert.Same(transaction, command.TransactionSeen);
+        Assert.Equal(cancellationSource.Token, command.CancellationTokenSeen);
+        Assert.Equal(0, connection.CloseCount);
+    }
+
+    [Fact]
     public async Task QueryChainAddsConditionalPredicatesWithUniqueParameters()
     {
         var table = new FilterTable();
@@ -358,7 +424,7 @@ public sealed class RawQueryRuntimeTests
         var connection = QueryFakeDbConnection.WithColumns(
             new[] { "id", "name" },
             new object?[] { 7, "alice" });
-        var rows = await connection.Query(query);
+        var rows = await connection.Query(query).ReadAsync();
 
         Assert.Equal(7, Assert.Single(rows).Id);
         var command = Assert.Single(connection.Commands);
@@ -383,7 +449,7 @@ public sealed class RawQueryRuntimeTests
             new[] { "ID", "NAME" },
             new object?[] { 7, "alice" });
 
-        var rows = await connection.Query(query);
+        var rows = await connection.Query(query).ReadAsync();
 
         Assert.Equal(7, Assert.Single(rows).Id);
         Assert.Equal(
@@ -408,7 +474,7 @@ public sealed class RawQueryRuntimeTests
         var connection = QueryFakeDbConnection.WithColumns(
             new[] { "id", "name" },
             new object?[] { 7, DBNull.Value });
-        var rows = await connection.Query(query);
+        var rows = await connection.Query(query).ReadAsync();
 
         Assert.Equal(7, Assert.Single(rows).Id);
         Assert.Empty(Assert.Single(connection.Commands).ParameterValues);
@@ -435,7 +501,7 @@ public sealed class RawQueryRuntimeTests
     private sealed class FilterTable : CobaltumTable<FilterRecord>
     {
         internal FilterTable()
-            : base("SELECT \"id\", \"name\" FROM \"users\"", Materialize)
+            : base("SELECT \"id\", \"name\" FROM \"users\"", Materialize, "DELETE FROM \"users\"")
         {
         }
 
@@ -449,5 +515,16 @@ public sealed class RawQueryRuntimeTests
             new FilterRecord(
                 reader.GetInt32(0),
                 reader.IsDBNull(1) ? null : reader.GetString(1));
+    }
+
+    private sealed class SelectOnlyTable : CobaltumTable<FilterRecord>
+    {
+        internal SelectOnlyTable()
+            : base("SELECT \"id\", \"name\" FROM \"users\"", static _ => new FilterRecord(0, null))
+        {
+        }
+
+        internal CobaltumColumn<FilterRecord, int> Id { get; } =
+            new CobaltumColumn<FilterRecord, int>("\"id\"");
     }
 }

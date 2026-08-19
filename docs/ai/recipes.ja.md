@@ -217,8 +217,63 @@ public static Task<IReadOnlyList<AppUsersRow>> ReadFilteredAsync(
         .Where(Tables.Users.Id.Equal(id))
         .WhereIf(filterByEmail, () => Tables.Users.Email.Equal(email));
 
-    return connection.Query(query, transaction: null, cancellationToken);
+    return connection.Query(query, transaction: null).ReadAsync(cancellationToken);
 }
+```
+
+## SQL を書かずにレコードを保存する
+
+`Tables.<Table>.Insert` は、生成された `record` 1 件から INSERT 文を組み立てます。自動採番の列は文から
+外れるため、値はデータベースが決めます。`InsertReturning` は同じ INSERT に `RETURNING` を付けて実行し、
+採番された主キーを含む保存後のレコードを返します。`InsertReturning` が生成されるのは PostgreSQL、
+SQLite、SQL Server です。MySQL と Oracle では生成されません。
+
+<!-- snippet: record-insert -->
+```csharp
+public static async Task<AppUsersRow> AddUserAsync(
+    DbConnection connection,
+    string email,
+    DateTimeOffset createdAt,
+    CancellationToken cancellationToken = default)
+{
+    var stored = await connection
+        .Query(Tables.Users.InsertReturning(new AppUsersRow(0, email, null, createdAt)))
+        .ReadAsync(cancellationToken);
+
+    return stored[0];
+}
+```
+
+## SQL を書かずにレコードを更新・削除する
+
+`Update` と `Delete` は主キーで 1 行を対象にします。`Update` が書き換えるのは、主キーでも自動採番でもない
+すべての列です。`DeleteWhere` は `Where` と同じ条件を受け取り、一致する行をすべて削除します。主キーの
+ないテーブルでは `Insert` と `DeleteWhere` だけが生成され、`Update` と `Delete` は生成されません。
+
+<!-- snippet: record-update-delete -->
+```csharp
+public static Task<int> RenameUserAsync(
+    DbConnection connection,
+    AppUsersRow user,
+    string displayName,
+    CancellationToken cancellationToken = default) =>
+    connection
+        .Query(Tables.Users.Update(user with { DisplayName = displayName }))
+        .ExecuteAsync(cancellationToken);
+
+public static Task<int> RemoveUserAsync(
+    DbConnection connection,
+    AppUsersRow user,
+    CancellationToken cancellationToken = default) =>
+    connection.Query(Tables.Users.Delete(user)).ExecuteAsync(cancellationToken);
+
+public static Task<int> RemoveUsersByEmailAsync(
+    DbConnection connection,
+    string email,
+    CancellationToken cancellationToken = default) =>
+    connection
+        .Query(Tables.Users.DeleteWhere(Tables.Users.Email.Equal(email)))
+        .ExecuteAsync(cancellationToken);
 ```
 
 ## ビルドで検査できない SQL を実行する

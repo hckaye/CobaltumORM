@@ -42,8 +42,9 @@ public sealed class PostgreSqlTypeE2ETests
         var generatedQueryRows = await PostgreSqlE2EQueries.FindByDocumentAsync(
             connection,
             "{\"active\": true}");
-        var tableRows = await connection.Query(
-            Tables.E2eValues.Where(Tables.E2eValues.Document.Equal("{\"active\": true}")));
+        var tableRows = await connection
+            .Query(Tables.E2eValues.Where(Tables.E2eValues.Document.Equal("{\"active\": true}")))
+            .ReadAsync();
 
         Assert.Equal(1, Assert.Single(generatedQueryRows).Id);
         Assert.Equal(1, Assert.Single(tableRows).Id);
@@ -91,8 +92,9 @@ public sealed class PostgreSqlTypeE2ETests
             3,
             new[] { "two" },
             new[] { Guid.Parse("11111111-1111-1111-1111-111111111111") });
-        var tableRows = await connection.Query(
-            Tables.E2eValues.Where(Tables.E2eValues.Numbers.Equal(new[] { 1, 2, 3 })));
+        var tableRows = await connection
+            .Query(Tables.E2eValues.Where(Tables.E2eValues.Numbers.Equal(new[] { 1, 2, 3 })))
+            .ReadAsync();
 
         var row = Assert.Single(rows);
         Assert.Equal(1, row.Id);
@@ -186,15 +188,14 @@ public sealed class PostgreSqlTypeE2ETests
         var after = await ReadMigrationHistoryCountAsync(connection);
         Assert.Equal(before, after);
         Assert.Empty(dryRun.Entries);
-        var table = Assert.Single(dryRun.FinalSchema.Tables);
-        Assert.Equal("e2e_values", table.Name);
+        var table = Assert.Single(dryRun.FinalSchema.Tables, item => item.Name == "e2e_values");
         Assert.Equal(7, table.Columns.Count);
 
         var missingHistoryDryRun = await new MigrationRunner(
                 new PostgreSqlMigrationAdapter(),
                 new MigrationRunnerOptions("__cobaltum_dry_run_missing"))
             .DryRunUpAsync(connection, CobaltumMigrationCatalog.All);
-        Assert.Single(missingHistoryDryRun.Entries);
+        Assert.Equal(CobaltumMigrationCatalog.All.Count, missingHistoryDryRun.Entries.Count);
 
         await using var missingHistoryCommand = connection.CreateCommand();
         missingHistoryCommand.CommandText = "SELECT to_regclass('__cobaltum_dry_run_missing')::text;";

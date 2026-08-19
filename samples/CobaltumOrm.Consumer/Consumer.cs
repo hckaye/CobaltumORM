@@ -44,10 +44,9 @@ public static class ConsumerProof
         int id,
         DbTransaction? transaction = null,
         CancellationToken cancellationToken = default) =>
-        connection.Query(
-            Tables.Users.Where(Tables.Users.Id.Equal(id)),
-            transaction,
-            cancellationToken);
+        connection
+            .Query(Tables.Users.Where(Tables.Users.Id.Equal(id)), transaction)
+            .ReadAsync(cancellationToken);
 
     public static async Task<string?> RawQueryAsync(
         DbConnection connection,

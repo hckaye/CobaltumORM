@@ -46,6 +46,11 @@ namespace CobaltumOrm.PostgreSql.E2E.Tests;
     $"SELECT position FROM {SqlSchema.Tables.E2eValues.Name} " +
     $"CROSS JOIN generate_subscripts({SqlSchema.Tables.E2eValues.Columns.Numbers}, 1) AS subscripts(position) " +
     $"WHERE {SqlSchema.Tables.E2eValues.Columns.Id} = @id ORDER BY position")]
+[Query<E2eRecordsRow>(
+    "FindRecordsByLabel",
+    $"SELECT {SqlSchema.Tables.E2eRecords.Columns.Id}, {SqlSchema.Tables.E2eRecords.Columns.Label}, " +
+    $"{SqlSchema.Tables.E2eRecords.Columns.Note} FROM {SqlSchema.Tables.E2eRecords.Name} " +
+    $"WHERE {SqlSchema.Tables.E2eRecords.Columns.Label} = @label")]
 public static partial class PostgreSqlE2EQueries
 {
 }

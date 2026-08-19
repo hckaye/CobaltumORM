@@ -39,6 +39,52 @@ public sealed class CompileTimeQueryBuildTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void GeneratedTableRecordsCanBeNamedAsACallerSuppliedResultType()
+    {
+        var result = BuildFixture("""
+            using System.Collections.Generic;
+            using System.Data.Common;
+            using System.Threading.Tasks;
+            using CobaltumOrm;
+            using CobaltumOrm.Generated;
+
+            [Query<UsersRow>(
+                "AllUsers",
+                "SELECT id, name, local_time, document, big_id FROM users")]
+            public static partial class TableRecordQueries
+            {
+            }
+
+            public static class Consumer
+            {
+                public static Task<IReadOnlyList<UsersRow>> InlineAsync(DbConnection connection) =>
+                    connection
+                        .Query<UsersRow>("SELECT id, name, local_time, document, big_id FROM users")
+                        .ReadAsync();
+
+                public static Task<IReadOnlyList<UsersRow>> NamedAsync(DbConnection connection) =>
+                    TableRecordQueries.AllUsersAsync(connection);
+
+                public static Task<IReadOnlyList<UsersRow>> TableAsync(DbConnection connection) =>
+                    connection.Query(Tables.Users.All()).ReadAsync();
+            }
+            """);
+
+        Assert.True(result.Succeeded, result.Output);
+
+        // The build transform writes the records, and the incremental generator must not write a
+        // second copy of them.
+        var models = Assert.Single(Directory.EnumerateFiles(
+            result.Directory,
+            "CobaltumOrm.Models.g.cs",
+            SearchOption.AllDirectories));
+        Assert.Equal(
+            Path.Combine(result.Directory, "obj", "Release", "net10.0", "CobaltumOrm", "CobaltumOrm.Models.g.cs"),
+            models);
+        Assert.Contains("public sealed record UsersRow(", File.ReadAllText(models), StringComparison.Ordinal);
+    }
+
     private static readonly object PackageLock = new object();
     private static string? _packageDirectory;
 
@@ -973,7 +1019,7 @@ public sealed class CompileTimeQueryBuildTests
         Assert.DoesNotContain(taskFiles, name => name!.Contains("Plain", StringComparison.Ordinal));
         Assert.DoesNotContain(taskFiles, name => name!.Contains("Migrations", StringComparison.Ordinal));
         Assert.Equal(
-            new[] { "CobaltumOrm.RawQueries.g.cs", "CobaltumOrm.SqlSchema.g.cs" },
+            new[] { "CobaltumOrm.Models.g.cs", "CobaltumOrm.RawQueries.g.cs", "CobaltumOrm.SqlSchema.g.cs" },
             taskFiles
                 .Where(name => name!.EndsWith(".g.cs", StringComparison.Ordinal))
                 .OrderBy(name => name, StringComparer.Ordinal)
@@ -1007,6 +1053,12 @@ public sealed class CompileTimeQueryBuildTests
             Path.GetFileName(CompileItem(line).Path) == Path.GetFileName(sqlSchemaPath)));
         Assert.Equal("true", sqlSchemaItem.AutoGen, ignoreCase: true);
         Assert.Equal("true", sqlSchemaItem.DesignTime, ignoreCase: true);
+
+        var modelsPath = Path.Combine(taskDirectory, "CobaltumOrm.Models.g.cs");
+        var modelsItem = CompileItem(compileItems.Single(line =>
+            Path.GetFileName(CompileItem(line).Path) == Path.GetFileName(modelsPath)));
+        Assert.Equal("true", modelsItem.AutoGen, ignoreCase: true);
+        Assert.Equal("true", modelsItem.DesignTime, ignoreCase: true);
 
         if (assertGeneratedModels)
         {

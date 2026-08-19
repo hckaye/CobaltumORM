@@ -156,6 +156,34 @@ public sealed class CobaltumOrmGenerationEngine
             sqlSchemaPath);
         compilation = compilation.AddSyntaxTrees(sqlSchemaTree);
 
+        // The table records are written here rather than by the incremental generator so that
+        // Query<TResult> and [Query<TResult>] can name them. A generator cannot read the source it
+        // produces, so a record it emitted in the same pass would resolve without a constructor.
+        string? modelsText = null;
+        SyntaxTree? modelsTree = null;
+        if (schemaBuild.Schema.Tables.Count != 0)
+        {
+            if (compilation.GetTypeByMetadataName("System.Runtime.CompilerServices.IsExternalInit") is null)
+            {
+                compilation = compilation.AddSyntaxTrees(CSharpSyntaxTree.ParseText(
+                    SourceText.From(GeneratedSourceWriter.WriteIsExternalInit(), Encoding.UTF8),
+                    parseOptions,
+                    Path.Combine(request.OutputDirectory, "CobaltumOrm.IsExternalInit.g.cs")));
+            }
+
+            modelsText = GeneratedSourceWriter.WriteModels(
+                generatedNamespace,
+                schemaBuild.Schema,
+                compilation,
+                dialect,
+                analysisCache);
+            modelsTree = CSharpSyntaxTree.ParseText(
+                SourceText.From(modelsText, Encoding.UTF8),
+                parseOptions,
+                Path.Combine(request.OutputDirectory, "CobaltumOrm.Models.g.cs"));
+            compilation = compilation.AddSyntaxTrees(modelsTree);
+        }
+
         var candidates = CollectCandidates(
             compilation,
             schemaBuild.Schema,
@@ -218,6 +246,14 @@ public sealed class CobaltumOrmGenerationEngine
             sqlSchemaText,
             GeneratedArtifactKind.Generated,
             null));
+        if (modelsText != null)
+        {
+            artifacts.Add(new GeneratedArtifact(
+                "CobaltumOrm.Models.g.cs",
+                modelsText,
+                GeneratedArtifactKind.Generated,
+                null));
+        }
 
         if (request.IncludeGeneratorOutput)
         {
@@ -233,6 +269,10 @@ public sealed class CobaltumOrmGenerationEngine
 
             compileTrees.AddRange(transformedTrees);
             compileTrees.Add(sqlSchemaTree);
+            if (modelsTree != null)
+            {
+                compileTrees.Add(modelsTree);
+            }
             compileTrees.Add(CSharpSyntaxTree.ParseText(
                 SourceText.From(definitionsText, Encoding.UTF8),
                 parseOptions,

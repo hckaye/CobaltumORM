@@ -67,6 +67,32 @@ public sealed class CobaltumCommandDefinition<TParameters>
     internal void Bind(DbCommand command, TParameters parameters) => _bind(command, parameters);
 }
 
+/// <summary>
+/// A generated command whose values are already bound. Commands execute statements that do
+/// not return rows and report the affected row count.
+/// </summary>
+public sealed class CobaltumCommandDefinition
+{
+    private readonly Action<DbCommand> _bind;
+
+    /// <summary>Initializes a command definition. This constructor is primarily intended for generated code.</summary>
+    public CobaltumCommandDefinition(string sql, Action<DbCommand> bind)
+    {
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            throw new ArgumentException("SQL text is required.", nameof(sql));
+        }
+
+        Sql = sql;
+        _bind = bind ?? throw new ArgumentNullException(nameof(bind));
+    }
+
+    /// <summary>Gets the validated SQL text.</summary>
+    public string Sql { get; }
+
+    internal void Bind(DbCommand command) => _bind(command);
+}
+
 /// <summary>A generated, strongly typed query whose values are already bound.</summary>
 public sealed class CobaltumQueryDefinition<TResult>
 {
@@ -74,6 +100,7 @@ public sealed class CobaltumQueryDefinition<TResult>
     private readonly Func<DbDataReader, TResult> _materialize;
     private readonly bool _hasWhereClause;
     private readonly int _nextWhereParameterIndex;
+    private readonly bool _acceptsFilters;
 
     /// <summary>Initializes a query definition. This constructor is primarily intended for generated code.</summary>
     public CobaltumQueryDefinition(
@@ -84,12 +111,34 @@ public sealed class CobaltumQueryDefinition<TResult>
     {
     }
 
+    /// <summary>
+    /// Creates a query definition that rejects <see cref="Where"/> and <see cref="WhereIf(bool,CobaltumPredicate{TResult})"/>.
+    /// Statements that cannot carry a trailing WHERE clause, such as an INSERT that reports the
+    /// stored row, use this factory. It is primarily intended for generated code.
+    /// </summary>
+    public static CobaltumQueryDefinition<TResult> WithoutFilters(
+        string sql,
+        Action<DbCommand> bind,
+        Func<DbDataReader, TResult> materialize) =>
+        new CobaltumQueryDefinition<TResult>(sql, bind, materialize, false, 0, false);
+
     internal CobaltumQueryDefinition(
         string sql,
         Action<DbCommand> bind,
         Func<DbDataReader, TResult> materialize,
         bool hasWhereClause,
         int nextWhereParameterIndex)
+        : this(sql, bind, materialize, hasWhereClause, nextWhereParameterIndex, true)
+    {
+    }
+
+    private CobaltumQueryDefinition(
+        string sql,
+        Action<DbCommand> bind,
+        Func<DbDataReader, TResult> materialize,
+        bool hasWhereClause,
+        int nextWhereParameterIndex,
+        bool acceptsFilters)
     {
         if (string.IsNullOrWhiteSpace(sql))
         {
@@ -106,6 +155,7 @@ public sealed class CobaltumQueryDefinition<TResult>
         _materialize = materialize ?? throw new ArgumentNullException(nameof(materialize));
         _hasWhereClause = hasWhereClause;
         _nextWhereParameterIndex = nextWhereParameterIndex;
+        _acceptsFilters = acceptsFilters;
     }
 
     /// <summary>Gets the validated SQL text.</summary>
@@ -122,6 +172,12 @@ public sealed class CobaltumQueryDefinition<TResult>
             throw new ArgumentNullException(nameof(predicate));
         }
 
+        if (!_acceptsFilters)
+        {
+            throw new NotSupportedException(
+                "This statement does not accept a WHERE clause.");
+        }
+
         var parameterName = predicate.ParameterName(
             "__cobaltum_where_" + _nextWhereParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
         var separator = _hasWhereClause ? " AND " : " WHERE ";
@@ -134,7 +190,8 @@ public sealed class CobaltumQueryDefinition<TResult>
             },
             _materialize,
             true,
-            _nextWhereParameterIndex + 1);
+            _nextWhereParameterIndex + 1,
+            true);
     }
 
     /// <summary>Returns this query when <paramref name="condition"/> is false; otherwise adds the predicate.</summary>
@@ -796,6 +853,123 @@ public sealed class CobaltumRawRow : IEnumerable<KeyValuePair<string, object?>>
     }
 }
 
+/// <summary>
+/// A generated query bound to one connection. Values are already supplied by the query
+/// definition, so the statement runs as soon as <see cref="ReadAsync"/> is awaited.
+/// </summary>
+public sealed class CobaltumGeneratedQuery<TResult>
+{
+    private readonly DbConnection _connection;
+    private readonly DbTransaction? _transaction;
+    private readonly Action<DbCommand> _bind;
+    private readonly Func<DbDataReader, TResult> _materialize;
+
+    internal CobaltumGeneratedQuery(
+        DbConnection connection,
+        string sql,
+        Action<DbCommand> bind,
+        Func<DbDataReader, TResult> materialize,
+        DbTransaction? transaction)
+    {
+        _connection = connection;
+        Sql = sql;
+        _bind = bind;
+        _materialize = materialize;
+        _transaction = transaction;
+    }
+
+    /// <summary>Gets the validated SQL text.</summary>
+    public string Sql { get; }
+
+    /// <summary>
+    /// Executes the query and materializes every row. A closed connection is opened
+    /// asynchronously and closed again; an already-open connection remains open.
+    /// </summary>
+    public async Task<IReadOnlyList<TResult>> ReadAsync(CancellationToken cancellationToken = default)
+    {
+        var closeWhenFinished = await CobaltumConnection.OpenIfNeededAsync(
+            _connection,
+            _transaction,
+            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using (var command = _connection.CreateCommand())
+            {
+                command.CommandText = Sql;
+                command.Transaction = _transaction;
+                _bind(command);
+                using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    var rows = new List<TResult>();
+                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        rows.Add(_materialize(reader));
+                    }
+
+                    return rows.AsReadOnly();
+                }
+            }
+        }
+        finally
+        {
+            CobaltumConnection.CloseIfOpened(_connection, closeWhenFinished);
+        }
+    }
+}
+
+/// <summary>
+/// A generated command bound to one connection. Values are already supplied by the command
+/// definition, so the statement runs as soon as <see cref="ExecuteAsync"/> is awaited.
+/// </summary>
+public sealed class CobaltumGeneratedCommand
+{
+    private readonly DbConnection _connection;
+    private readonly DbTransaction? _transaction;
+    private readonly Action<DbCommand> _bind;
+
+    internal CobaltumGeneratedCommand(
+        DbConnection connection,
+        string sql,
+        Action<DbCommand> bind,
+        DbTransaction? transaction)
+    {
+        _connection = connection;
+        Sql = sql;
+        _bind = bind;
+        _transaction = transaction;
+    }
+
+    /// <summary>Gets the validated SQL text.</summary>
+    public string Sql { get; }
+
+    /// <summary>
+    /// Executes the command and returns the affected row count reported by the provider.
+    /// A closed connection is opened asynchronously and closed again; an already-open
+    /// connection remains open.
+    /// </summary>
+    public async Task<int> ExecuteAsync(CancellationToken cancellationToken = default)
+    {
+        var closeWhenFinished = await CobaltumConnection.OpenIfNeededAsync(
+            _connection,
+            _transaction,
+            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using (var command = _connection.CreateCommand())
+            {
+                command.CommandText = Sql;
+                command.Transaction = _transaction;
+                _bind(command);
+                return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            CobaltumConnection.CloseIfOpened(_connection, closeWhenFinished);
+        }
+    }
+}
+
 /// <summary>Provider-neutral execution methods used by raw and generated queries.</summary>
 public static class CobaltumQueryExtensions
 {
@@ -901,12 +1075,22 @@ public static class CobaltumQueryExtensions
     /// Executes a generated command and returns the affected row count. A closed connection
     /// is opened asynchronously and closed again; an already-open connection remains open.
     /// </summary>
-    public static async Task<int> ExecuteAsync<TParameters>(
+    public static Task<int> ExecuteAsync<TParameters>(
         this DbConnection connection,
         CobaltumCommandDefinition<TParameters> command,
         TParameters parameters,
         DbTransaction? transaction = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        Query(connection, command, parameters, transaction).ExecuteAsync(cancellationToken);
+
+    /// <summary>
+    /// Binds a generated command whose values are already supplied. Call
+    /// <see cref="CobaltumGeneratedCommand.ExecuteAsync"/> to run it.
+    /// </summary>
+    public static CobaltumGeneratedCommand Query(
+        this DbConnection connection,
+        CobaltumCommandDefinition command,
+        DbTransaction? transaction = null)
     {
         if (connection is null)
         {
@@ -918,36 +1102,45 @@ public static class CobaltumQueryExtensions
             throw new ArgumentNullException(nameof(command));
         }
 
-        var closeWhenFinished = await CobaltumConnection.OpenIfNeededAsync(
-            connection,
-            transaction,
-            cancellationToken).ConfigureAwait(false);
-        try
-        {
-            using (var dbCommand = connection.CreateCommand())
-            {
-                dbCommand.CommandText = command.Sql;
-                dbCommand.Transaction = transaction;
-                command.Bind(dbCommand, parameters);
-                return await dbCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            CobaltumConnection.CloseIfOpened(connection, closeWhenFinished);
-        }
+        return new CobaltumGeneratedCommand(connection, command.Sql, command.Bind, transaction);
     }
 
     /// <summary>
-    /// Executes a generated typed query and materializes all rows. A closed connection
-    /// is opened asynchronously and closed again; an already-open connection remains open.
+    /// Binds a generated command to its parameter record. Call
+    /// <see cref="CobaltumGeneratedCommand.ExecuteAsync"/> to run it.
     /// </summary>
-    public static async Task<IReadOnlyList<TResult>> Query<TParameters, TResult>(
+    public static CobaltumGeneratedCommand Query<TParameters>(
+        this DbConnection connection,
+        CobaltumCommandDefinition<TParameters> command,
+        TParameters parameters,
+        DbTransaction? transaction = null)
+    {
+        if (connection is null)
+        {
+            throw new ArgumentNullException(nameof(connection));
+        }
+
+        if (command is null)
+        {
+            throw new ArgumentNullException(nameof(command));
+        }
+
+        return new CobaltumGeneratedCommand(
+            connection,
+            command.Sql,
+            dbCommand => command.Bind(dbCommand, parameters),
+            transaction);
+    }
+
+    /// <summary>
+    /// Binds a generated typed query to its parameter record. Call
+    /// <see cref="CobaltumGeneratedQuery{TResult}.ReadAsync"/> to materialize rows.
+    /// </summary>
+    public static CobaltumGeneratedQuery<TResult> Query<TParameters, TResult>(
         this DbConnection connection,
         CobaltumQueryDefinition<TParameters, TResult> query,
         TParameters parameters,
-        DbTransaction? transaction = null,
-        CancellationToken cancellationToken = default)
+        DbTransaction? transaction = null)
     {
         if (connection is null)
         {
@@ -959,44 +1152,22 @@ public static class CobaltumQueryExtensions
             throw new ArgumentNullException(nameof(query));
         }
 
-        var closeWhenFinished = await CobaltumConnection.OpenIfNeededAsync(
+        return new CobaltumGeneratedQuery<TResult>(
             connection,
-            transaction,
-            cancellationToken).ConfigureAwait(false);
-        try
-        {
-            using (var command = connection.CreateCommand())
-            {
-                command.CommandText = query.Sql;
-                command.Transaction = transaction;
-                query.Bind(command, parameters);
-                using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    var rows = new List<TResult>();
-                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                    {
-                        rows.Add(query.Materialize(reader));
-                    }
-
-                    return rows.AsReadOnly();
-                }
-            }
-        }
-        finally
-        {
-            CobaltumConnection.CloseIfOpened(connection, closeWhenFinished);
-        }
+            query.Sql,
+            command => query.Bind(command, parameters),
+            query.Materialize,
+            transaction);
     }
 
     /// <summary>
-    /// Executes a generated typed query whose values are already bound. A closed connection
-    /// is opened asynchronously and closed again; an already-open connection remains open.
+    /// Binds a generated typed query whose values are already supplied. Call
+    /// <see cref="CobaltumGeneratedQuery{TResult}.ReadAsync"/> to materialize rows.
     /// </summary>
-    public static async Task<IReadOnlyList<TResult>> Query<TResult>(
+    public static CobaltumGeneratedQuery<TResult> Query<TResult>(
         this DbConnection connection,
         CobaltumQueryDefinition<TResult> query,
-        DbTransaction? transaction = null,
-        CancellationToken cancellationToken = default)
+        DbTransaction? transaction = null)
     {
         if (connection is null)
         {
@@ -1008,33 +1179,12 @@ public static class CobaltumQueryExtensions
             throw new ArgumentNullException(nameof(query));
         }
 
-        var closeWhenFinished = await CobaltumConnection.OpenIfNeededAsync(
+        return new CobaltumGeneratedQuery<TResult>(
             connection,
-            transaction,
-            cancellationToken).ConfigureAwait(false);
-        try
-        {
-            using (var command = connection.CreateCommand())
-            {
-                command.CommandText = query.Sql;
-                command.Transaction = transaction;
-                query.Bind(command);
-                using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    var rows = new List<TResult>();
-                    while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                    {
-                        rows.Add(query.Materialize(reader));
-                    }
-
-                    return rows.AsReadOnly();
-                }
-            }
-        }
-        finally
-        {
-            CobaltumConnection.CloseIfOpened(connection, closeWhenFinished);
-        }
+            query.Sql,
+            query.Bind,
+            query.Materialize,
+            transaction);
     }
 }
 
@@ -1429,17 +1579,33 @@ public sealed class CobaltumColumn<TRecord, TValue>
         char.IsLetter(character) || character == '_';
 }
 
-/// <summary>A generated, typed entry point for selecting rows from one table.</summary>
+/// <summary>A generated, typed entry point for one table.</summary>
 public abstract class CobaltumTable<TRecord>
 {
     private readonly string _selectSql;
     private readonly Func<DbDataReader, TRecord> _materialize;
+    private readonly string? _deleteSql;
 
     /// <summary>Initializes a generated table entry. This constructor is primarily intended for generated code.</summary>
     protected CobaltumTable(string selectSql, Func<DbDataReader, TRecord> materialize)
+        : this(selectSql, materialize, null)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a generated table entry that also supports <see cref="DeleteWhere"/>.
+    /// This constructor is primarily intended for generated code.
+    /// </summary>
+    protected CobaltumTable(string selectSql, Func<DbDataReader, TRecord> materialize, string? deleteSql)
     {
         _selectSql = selectSql ?? throw new ArgumentNullException(nameof(selectSql));
         _materialize = materialize ?? throw new ArgumentNullException(nameof(materialize));
+        if (deleteSql != null && string.IsNullOrWhiteSpace(deleteSql))
+        {
+            throw new ArgumentException("SQL text is required.", nameof(deleteSql));
+        }
+
+        _deleteSql = deleteSql;
     }
 
     /// <summary>Starts an immutable typed query for the table.</summary>
@@ -1463,5 +1629,28 @@ public abstract class CobaltumTable<TRecord>
             _materialize,
             true,
             1);
+    }
+
+    /// <summary>
+    /// Deletes every row matching a generated, parameterized predicate. Values are passed as
+    /// database parameters instead of being concatenated into SQL.
+    /// </summary>
+    public CobaltumCommandDefinition DeleteWhere(CobaltumPredicate<TRecord> predicate)
+    {
+        if (predicate is null)
+        {
+            throw new ArgumentNullException(nameof(predicate));
+        }
+
+        if (_deleteSql is null)
+        {
+            throw new NotSupportedException(
+                "This table entry was created without a DELETE statement.");
+        }
+
+        var parameterName = predicate.ParameterName("__cobaltum_where_0");
+        return new CobaltumCommandDefinition(
+            _deleteSql + " WHERE " + predicate.SqlWithParameter(parameterName),
+            command => predicate.Bind(command, parameterName));
     }
 }

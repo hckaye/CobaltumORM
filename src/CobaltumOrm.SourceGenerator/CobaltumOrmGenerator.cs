@@ -186,7 +186,11 @@ public sealed class CobaltumOrmGenerator : IIncrementalGenerator
                     System.Text.Encoding.UTF8));
         }
 
-        if (schema.Tables.Count != 0)
+        // The build transform writes the table records before the compiler runs, so that
+        // Query<TResult> and [Query<TResult>] can name them. Generate them here only when the
+        // transform is not part of this build.
+        if (schema.Tables.Count != 0 &&
+            compilation.GetTypeByMetadataName(generatedNamespace + ".Tables") is null)
         {
             context.AddSource(
                 "CobaltumOrm.Models.g.cs",

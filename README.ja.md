@@ -28,6 +28,7 @@ CobaltumORM は PostgreSQL を主な対象とする .NET / C# 向け ORM です�
 - [CLI によるマイグレーション管理](#cli-によるマイグレーション管理)
 - [CLI による明示的なコード生成](#cli-による明示的なコード生成)
 - [生成されるテーブル型](#生成されるテーブル型)
+- [`record` からの `INSERT`、`UPDATE`、`DELETE`](#record-からの-insertupdatedelete)
 - [名前付きクエリ](#名前付きクエリ)
 - [内容がコンパイル時に決まる `Query` の結果型](#内容がコンパイル時に決まる-query-の結果型)
 - [ユーザー定義の結果型](#ユーザー定義の結果型)
@@ -49,6 +50,7 @@ CobaltumORM は、SQL を明示的に書きながら、型安全なデータ変�
 - RETURNING を含まない INSERT、UPDATE、DELETE、TRUNCATE には `[Query]` で名前を付けられます。生成されるメソッドは影響を受けた行数を返します。
 - マイグレーションで名前を変更または削除すると、古い `SqlSchema` 参照と古い名前を含む SQL はコンパイルエラーになります。現在のスキーマでは実行できない SQL をビルド時に検出します。
   - 現在の検査対象は、PostgreSQL の CRUD 操作に関わる一部の構文です。権限、制約、トリガー、実データに依存する成否はビルド時には検査できません。
+- 生成されたテーブルの `record` から 1 行分の `INSERT`、`UPDATE`、`DELETE` を組み立てられます。単純な更新処理は SQL を書かずに済みます。
 - EF Core の変更追跡や `SaveChanges` に相当する API は提供しません。クエリと更新処理は明示的に実行します。
 
 ### 主要な他ORMとの比較
@@ -726,7 +728,7 @@ Query プロジェクトから生成された props ファイルを読み込み�
 
 各テーブルから `public sealed record` 型と、列を型安全に参照するためのテーブル情報が生成されます。スキーマ名とテーブル名は `[CobaltumTable]`、各プロパティの SQL 上の名前、データ型、null 許容の有無、主キー、既定値の式は `[CobaltumColumn]` に記録されます。C# のプロパティ名が重複する場合は、末尾に `_2`、`_3` を付けます。異なるスキーマに同名のテーブルがある場合は、スキーマ名を `record` 型の名前に含めます。
 
-`Tables.Users` には `Query()`、`All()`、`Where(...)` があります。`Query()` と `All()` が返す `CobaltumQueryDefinition<TRecord>` に `Where(...)` と `WhereIf(...)` を続けて書けます。値は SQL 文字列へ連結せず、`DbParameter` として渡されます。絞り込み条件を追加しても結果の `record` 型は変わりません。
+`Tables.Users` には `Query()`、`All()`、`Where(...)` があります。`Query()` と `All()` が返す `CobaltumQueryDefinition<TRecord>` に `Where(...)` と `WhereIf(...)` を続けて書けます。組み立てたものを `connection.Query(...)` に渡し、`ReadAsync` で実行します。値は SQL 文字列へ連結せず、`DbParameter` として渡されます。絞り込み条件を追加しても結果の `record` 型は変わりません。
 
 ```csharp
 using System.Collections.Generic;
@@ -743,10 +745,9 @@ public static class UsersReader
         DbTransaction? transaction = null,
         CancellationToken cancellationToken = default)
     {
-        return await connection.Query(
-            Tables.Users.All(),
-            transaction,
-            cancellationToken);
+        return await connection
+            .Query(Tables.Users.All(), transaction)
+            .ReadAsync(cancellationToken);
     }
 
     public static Task<IReadOnlyList<AppUsersRow>> ReadFilteredAsync(
@@ -764,15 +765,80 @@ public static class UsersReader
                 includeDisplayName,
                 () => Tables.Users.DisplayName.Equal(displayName));
 
-        return connection.Query(
-            query,
-            transaction,
-            cancellationToken);
+        return connection.Query(query, transaction).ReadAsync(cancellationToken);
     }
 }
 ```
 
 この例の `AppUsersRow`、`Tables.Users`、`Id`、`DisplayName` は、サンプルにある `app.users` スキーマから生成される名前です。`id` は `int` です。`WhereIf` の条件が `false` の場合は渡した関数を呼ばず、`true` の場合だけ絞り込み条件を追加します。
+
+## `record` からの `INSERT`、`UPDATE`、`DELETE`
+
+同じテーブル情報から、生成された `record` 1 件を対象とする更新処理を組み立てられます。組み立てたものを `connection.Query(...)` に渡し、`ExecuteAsync` で実行すると影響を受けた行数が返ります。用意しているのは、SQL を手で書いても得るものがない範囲だけです。主キーで 1 行を指定する以上のことは SQL で書きます。
+
+| メンバー | 生成される文 | 戻り値 |
+| --- | --- | --- |
+| `Insert(record)` | 自動採番の列を除いた `INSERT` | 影響を受けた行数 |
+| `InsertReturning(record)` | 保存後の行を返す `INSERT` | テーブルの `record` |
+| `Update(record)` | 主キーで 1 行を指定する `UPDATE` | 影響を受けた行数 |
+| `Delete(record)` | 主キーで 1 行を指定する `DELETE` | 影響を受けた行数 |
+| `DeleteWhere(predicate)` | 条件 1 つで絞り込む `DELETE` | 影響を受けた行数 |
+
+```csharp
+using System;
+using System.Data.Common;
+using System.Threading;
+using System.Threading.Tasks;
+using CobaltumOrm;
+using CobaltumOrm.Sample.Generated;
+
+public static class UsersWriter
+{
+    public static async Task<AppUsersRow> AddAsync(
+        DbConnection connection,
+        string email,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await connection
+            .Query(Tables.Users.InsertReturning(
+                new AppUsersRow(0, email, null, DateTimeOffset.UtcNow)))
+            .ReadAsync(cancellationToken);
+
+        return stored[0];
+    }
+
+    public static Task<int> RenameAsync(
+        DbConnection connection,
+        AppUsersRow user,
+        string displayName,
+        CancellationToken cancellationToken = default) =>
+        connection
+            .Query(Tables.Users.Update(user with { DisplayName = displayName }))
+            .ExecuteAsync(cancellationToken);
+
+    public static Task<int> RemoveAsync(
+        DbConnection connection,
+        AppUsersRow user,
+        CancellationToken cancellationToken = default) =>
+        connection.Query(Tables.Users.Delete(user)).ExecuteAsync(cancellationToken);
+}
+```
+
+`Insert` は自動採番の列を文から外すため、値はデータベースが決めます。上の例で `id` に渡している `0` は送信されません。それ以外の列は、SQL 側に既定値があるものも含めて `record` が持つ値をそのまま書き込みます。
+
+`InsertReturning` が生成されるのは、`INSERT ... RETURNING` を使う PostgreSQL と SQLite、`INSERT ... OUTPUT INSERTED.*` を使う SQL Server です。MySQL と Oracle には CobaltumORM が生成する形がないため、`Insert` だけが生成されます。トリガーのある SQL Server のテーブルは `INTO` を伴わない `OUTPUT` を受け付けないので、その場合は別のクエリで読み戻してください。
+
+`Update` は、主キーでも自動採番でもないすべての列を書き換え、主キー全体で行を指定します。`Delete` も同じ方法で行を指定します。主キーのないテーブルでは、1 行を特定できないため `Update` と `Delete` は生成されず、`Insert` と `DeleteWhere` だけが生成されます。すべての列が主キーのテーブルでは書き換える列が残らないため、`Update` は生成されません。
+
+`DeleteWhere` は `Where` と同じ条件を受け取り、比較する値は `DbParameter` として渡されます。受け取れる条件は 1 つです。複数の条件で削除する場合は SQL を書きます。
+
+```csharp
+await connection
+    .Query(Tables.Users.DeleteWhere(Tables.Users.Email.Equal(address)))
+    .ExecuteAsync(cancellationToken);
+```
+
+これらの文はマイグレーションから組み立てたスキーマをもとに生成されるため、列の名前を変更したり削除したりすると、該当する呼び出しはコンパイルエラーになります。排他制御、論理削除、監査、一括処理には対応していません。これらが必要な更新処理は `Query` に SQL を書いてください。
 
 ## 名前付きクエリ
 
@@ -920,6 +986,8 @@ public sealed record ArrayView(
 変換元の CLR 型をビルド時に特定する必要があるため、二つの型を取るハンドラーは検査対象の `Query` で使います。`NoCheckQuery<TResult>` では、列を直接読む `IValueHandler<TValue>` を引き続き利用できます。行全体を変換する場合は、結果型に `[ResultHandler<THandler>]` を付け、`IResultHandler<TResult>` を実装します。カスタムハンドラーを指定した部分の変換はハンドラーが受け持ちます。`Query` の SQL 自体は引き続きコンパイル時に検査されます。
 
 ハンドラー型には、public な引数なしコンストラクターが必要です。インスタンスは一つだけ作成して再利用するため、ハンドラーには変更可能な状態を持たせず、複数スレッドから呼ばれても動作するようにしてください。結果マッピングでは、実行時のリフレクションによる型走査やメンバー呼び出しを行いません。
+
+`AppUsersRow` のような生成されたテーブルの `record` も `TResult` に指定できます。テーブルの `record` はコンパイラーが動く前に書き出されるため、あるテーブルの列をそのまま取り出すクエリは、同じ形の型を別に定義しなくてもその `record` へマッピングできます。
 
 ## 補間文字列を使う `Query`
 

@@ -353,7 +353,7 @@ internal static class GeneratedSourceWriter
             var columnNames = CSharpNames.Allocate(
                 table.Columns,
                 column => CSharpNames.Pascal(column.Name, "Column"),
-                reserved: new[] { "All", "Where", "Query" });
+                reserved: TableMemberNames);
             builder.AppendLine("[global::CobaltumOrm.CobaltumTable(" + CSharpNames.Literal(table.Schema) + ", " + CSharpNames.Literal(table.Name) + ")]");
             builder.Append("public sealed record ").Append(recordName).AppendLine("(");
             for (var index = 0; index < table.Columns.Count; index++)
@@ -405,13 +405,19 @@ internal static class GeneratedSourceWriter
             var columnNames = CSharpNames.Allocate(
                 table.Columns,
                 column => CSharpNames.Pascal(column.Name, "Column"),
-                reserved: new[] { "All", "Where", "Query" });
+                reserved: TableMemberNames);
+            var quotedTable = Qualify(table, dialect);
+            var quotedColumns = table.Columns
+                .Select(column => dialect.IdentifierQuoter.QuoteIdentifier(column.Name))
+                .ToList();
             builder.Append("public sealed class ").Append(recordName).Append("Table : global::CobaltumOrm.CobaltumTable<")
                 .Append(recordName).AppendLine(">");
             builder.AppendLine("{");
             builder.Append("    internal ").Append(recordName).Append("Table() : base(")
-                .Append(CSharpNames.Literal("SELECT " + string.Join(", ", table.Columns.Select(column => dialect.IdentifierQuoter.QuoteIdentifier(column.Name))) + " FROM " + Qualify(table, dialect)))
-                .AppendLine(", Materialize) { }");
+                .Append(CSharpNames.Literal("SELECT " + string.Join(", ", quotedColumns) + " FROM " + quotedTable))
+                .Append(", Materialize, ")
+                .Append(CSharpNames.Literal("DELETE FROM " + quotedTable))
+                .AppendLine(") { }");
             builder.AppendLine();
             for (var index = 0; index < table.Columns.Count; index++)
             {
@@ -437,6 +443,8 @@ internal static class GeneratedSourceWriter
                 builder.Append(", '").Append(dialect.Provider == DatabaseProvider.Oracle ? ':' : '@').Append("'");
                 builder.AppendLine(");");
             }
+
+            AppendTableCommands(builder, environment, dialect, table, query, recordName, columnNames, quotedTable, quotedColumns);
 
             builder.AppendLine();
             builder.Append("    private static ").Append(recordName).AppendLine(" Materialize(global::System.Data.Common.DbDataReader reader)");
@@ -628,9 +636,7 @@ internal static class GeneratedSourceWriter
             builder.AppendLine("        global::System.Data.Common.DbTransaction? transaction = null,");
             builder.AppendLine("        global::System.Threading.CancellationToken cancellationToken = default)");
             builder.AppendLine("    {");
-            builder.Append("        return global::CobaltumOrm.CobaltumQueryExtensions.")
-                .Append(isCommand ? "ExecuteAsync" : "Query")
-                .Append("(connection, ")
+            builder.Append("        return global::CobaltumOrm.CobaltumQueryExtensions.Query(connection, ")
                 .Append(queryName).Append(", new ").Append(parametersName);
             if (analysis.Parameters.Count == 0)
             {
@@ -641,7 +647,8 @@ internal static class GeneratedSourceWriter
                 builder.Append('(').Append(string.Join(", ", analysis.Parameters.Select(parameter => localParameterNames[parameter]))).Append(')');
             }
 
-            builder.AppendLine(", transaction, cancellationToken);");
+            builder.Append(", transaction).")
+                .AppendLine(isCommand ? "ExecuteAsync(cancellationToken);" : "ReadAsync(cancellationToken);");
             builder.AppendLine("    }");
             builder.AppendLine();
         }
@@ -730,6 +737,248 @@ internal static class GeneratedSourceWriter
         SyntaxFacts.GetContextualKeywordKind(identifier) == SyntaxKind.None
             ? identifier
             : "@" + identifier;
+
+    /// <summary>
+    /// Writes the record-based INSERT, UPDATE, and DELETE members of one generated table class.
+    /// A table without a primary key gets no UPDATE or DELETE, and a table whose columns are
+    /// all identity columns gets no INSERT.
+    /// </summary>
+    private static void AppendTableCommands(
+        StringBuilder builder,
+        TypeEnvironment environment,
+        IDatabaseDialect dialect,
+        Table table,
+        AnalysisResult query,
+        string recordName,
+        Dictionary<Column, string> columnNames,
+        string quotedTable,
+        IReadOnlyList<string> quotedColumns)
+    {
+        var prefix = ParameterPrefix(dialect);
+        var insertColumns = new List<int>();
+        var setColumns = new List<int>();
+        var keyColumns = new List<int>();
+        for (var index = 0; index < table.Columns.Count; index++)
+        {
+            var column = table.Columns[index];
+            if (!column.IsIdentity)
+            {
+                insertColumns.Add(index);
+                if (!column.IsPrimaryKey)
+                {
+                    setColumns.Add(index);
+                }
+            }
+
+            if (column.IsPrimaryKey)
+            {
+                keyColumns.Add(index);
+            }
+        }
+
+        var valueParameters = insertColumns
+            .Select((_, position) => prefix + "p" + position.ToString(CultureInfo.InvariantCulture))
+            .ToList();
+        var keyParameters = keyColumns
+            .Select((_, position) => prefix + "k" + position.ToString(CultureInfo.InvariantCulture))
+            .ToList();
+
+        if (insertColumns.Count != 0)
+        {
+            var into = "INSERT INTO " + quotedTable + " (" +
+                string.Join(", ", insertColumns.Select(index => quotedColumns[index])) + ")";
+            var values = " VALUES (" + string.Join(", ", valueParameters) + ")";
+
+            builder.AppendLine();
+            builder.AppendLine("    /// <summary>Builds an INSERT for one record. Identity columns keep their database-assigned values.</summary>");
+            builder.Append("    public global::CobaltumOrm.CobaltumCommandDefinition Insert(").Append(recordName).AppendLine(" record)");
+            builder.AppendLine("    {");
+            AppendRecordNullCheck(builder);
+            builder.AppendLine("        return new global::CobaltumOrm.CobaltumCommandDefinition(");
+            builder.Append("            ").Append(CSharpNames.Literal(into + values)).AppendLine(",");
+            builder.AppendLine("            command =>");
+            builder.AppendLine("            {");
+            AppendBindings(builder, environment, dialect, table, query, columnNames, insertColumns, valueParameters);
+            builder.AppendLine("            });");
+            builder.AppendLine("    }");
+
+            var returningSql = ReturningInsertSql(dialect, into, values, quotedColumns);
+            if (returningSql != null)
+            {
+                builder.AppendLine();
+                builder.AppendLine("    /// <summary>Builds an INSERT that returns the stored record, including database-assigned values.</summary>");
+                builder.Append("    public global::CobaltumOrm.CobaltumQueryDefinition<").Append(recordName)
+                    .Append("> InsertReturning(").Append(recordName).AppendLine(" record)");
+                builder.AppendLine("    {");
+                AppendRecordNullCheck(builder);
+                builder.Append("        return global::CobaltumOrm.CobaltumQueryDefinition<").Append(recordName)
+                    .AppendLine(">.WithoutFilters(");
+                builder.Append("            ").Append(CSharpNames.Literal(returningSql)).AppendLine(",");
+                builder.AppendLine("            command =>");
+                builder.AppendLine("            {");
+                AppendBindings(builder, environment, dialect, table, query, columnNames, insertColumns, valueParameters);
+                builder.AppendLine("            },");
+                builder.AppendLine("            Materialize);");
+                builder.AppendLine("    }");
+            }
+        }
+
+        if (keyColumns.Count == 0)
+        {
+            return;
+        }
+
+        var where = " WHERE " + string.Join(
+            " AND ",
+            keyColumns.Select((index, position) => quotedColumns[index] + " = " + keyParameters[position]));
+
+        if (setColumns.Count != 0)
+        {
+            var setParameters = setColumns
+                .Select((_, position) => prefix + "p" + position.ToString(CultureInfo.InvariantCulture))
+                .ToList();
+            var assignments = string.Join(
+                ", ",
+                setColumns.Select((index, position) => quotedColumns[index] + " = " + setParameters[position]));
+
+            builder.AppendLine();
+            builder.AppendLine("    /// <summary>Builds an UPDATE that matches one record by its primary key.</summary>");
+            builder.Append("    public global::CobaltumOrm.CobaltumCommandDefinition Update(").Append(recordName).AppendLine(" record)");
+            builder.AppendLine("    {");
+            AppendRecordNullCheck(builder);
+            builder.AppendLine("        return new global::CobaltumOrm.CobaltumCommandDefinition(");
+            builder.Append("            ").Append(CSharpNames.Literal("UPDATE " + quotedTable + " SET " + assignments + where)).AppendLine(",");
+            builder.AppendLine("            command =>");
+            builder.AppendLine("            {");
+            AppendBindings(builder, environment, dialect, table, query, columnNames, setColumns, setParameters);
+            AppendBindings(builder, environment, dialect, table, query, columnNames, keyColumns, keyParameters);
+            builder.AppendLine("            });");
+            builder.AppendLine("    }");
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("    /// <summary>Builds a DELETE that matches one record by its primary key.</summary>");
+        builder.Append("    public global::CobaltumOrm.CobaltumCommandDefinition Delete(").Append(recordName).AppendLine(" record)");
+        builder.AppendLine("    {");
+        AppendRecordNullCheck(builder);
+        builder.AppendLine("        return new global::CobaltumOrm.CobaltumCommandDefinition(");
+        builder.Append("            ").Append(CSharpNames.Literal("DELETE FROM " + quotedTable + where)).AppendLine(",");
+        builder.AppendLine("            command =>");
+        builder.AppendLine("            {");
+        AppendBindings(builder, environment, dialect, table, query, columnNames, keyColumns, keyParameters);
+        builder.AppendLine("            });");
+        builder.AppendLine("    }");
+    }
+
+    /// <summary>
+    /// Returns the INSERT statement that reports the stored row, or null when the provider
+    /// has no form CobaltumORM generates.
+    /// </summary>
+    private static string? ReturningInsertSql(
+        IDatabaseDialect dialect,
+        string into,
+        string values,
+        IReadOnlyList<string> quotedColumns)
+    {
+        switch (dialect.Provider)
+        {
+            case DatabaseProvider.PostgreSql:
+            case DatabaseProvider.Sqlite:
+                return into + values + " RETURNING " + string.Join(", ", quotedColumns);
+            case DatabaseProvider.SqlServer:
+                return into + " OUTPUT " +
+                    string.Join(", ", quotedColumns.Select(column => "INSERTED." + column)) +
+                    values;
+            default:
+                return null;
+        }
+    }
+
+    private static void AppendRecordNullCheck(StringBuilder builder)
+    {
+        builder.AppendLine("        if (record is null)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            throw new global::System.ArgumentNullException(nameof(record));");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+    }
+
+    private static void AppendBindings(
+        StringBuilder builder,
+        TypeEnvironment environment,
+        IDatabaseDialect dialect,
+        Table table,
+        AnalysisResult query,
+        Dictionary<Column, string> columnNames,
+        IReadOnlyList<int> columnIndexes,
+        IReadOnlyList<string> parameterNames)
+    {
+        for (var position = 0; position < columnIndexes.Count; position++)
+        {
+            var index = columnIndexes[position];
+            var column = table.Columns[index];
+            AppendRecordParameter(
+                builder,
+                environment,
+                dialect,
+                column,
+                query.Columns[index].ClrType,
+                parameterNames[position],
+                columnNames[column]);
+        }
+    }
+
+    private static readonly string[] TableMemberNames =
+    {
+        "All",
+        "Where",
+        "Query",
+        "Insert",
+        "InsertReturning",
+        "Update",
+        "Delete",
+        "DeleteWhere",
+    };
+
+    private static string ParameterPrefix(IDatabaseDialect dialect) =>
+        dialect.Provider == DatabaseProvider.Oracle ? ":" : "@";
+
+    private static string? PostgreSqlDatabaseTypeName(IDatabaseDialect dialect, Column column)
+    {
+        if (dialect.Provider != DatabaseProvider.PostgreSql ||
+            !(dialect.TypeMapper is PostgreSqlTypeMapper mapper) ||
+            !mapper.TryMapType(column.SqlType, out var columnType))
+        {
+            return null;
+        }
+
+        return mapper.ToDatabaseTypeName(columnType);
+    }
+
+    private static void AppendRecordParameter(
+        StringBuilder builder,
+        TypeEnvironment environment,
+        IDatabaseDialect dialect,
+        Column column,
+        string clrType,
+        string parameterName,
+        string propertyName)
+    {
+        var databaseTypeName = PostgreSqlDatabaseTypeName(dialect, column);
+        builder.Append("                global::CobaltumOrm.CobaltumParameter.")
+            .Append(databaseTypeName != null ? "AddConfigured" : "Add")
+            .Append("(command, ")
+            .Append(CSharpNames.Literal(parameterName)).Append(", record.")
+            .Append(propertyName).Append(", global::System.Data.DbType.")
+            .Append(environment.DbTypeName(clrType));
+        if (databaseTypeName != null)
+        {
+            builder.Append(", static parameter => ((global::Npgsql.NpgsqlParameter)parameter).DataTypeName = ")
+                .Append(CSharpNames.Literal(databaseTypeName));
+        }
+
+        builder.AppendLine(");");
+    }
 
     private static string Qualify(Table table, IDatabaseDialect dialect)
     {

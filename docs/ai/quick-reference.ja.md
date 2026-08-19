@@ -11,7 +11,8 @@
 
 SQL は手で書きます。ビルドがそれを解析し、マイグレーションから組み立てたスキーマと照合して、実行
 用の C# を生成します。ビルド中にデータベースへは接続しません。変更追跡と `SaveChanges` に相当する
-仕組みはなく、クエリと更新処理はすべて明示的に実行します。
+仕組みはなく、クエリと更新処理はすべて明示的に実行します。生成されたテーブルの `record` には 1 行分の
+INSERT、UPDATE、DELETE があり、単純な操作は SQL を書かずに済ませられます。
 
 ## クエリ API の選択
 
@@ -25,8 +26,15 @@ SQL は手で書きます。ビルドがそれを解析し、マイグレーシ�
 | SQL の文字列が実行時にしか決まらない、または解析対象外の構文を使う場合 | `connection.NoCheckQuery(sql)` | `CobaltumRawRow` |
 | 検査しない SQL を既存の型へマッピングする場合 | `connection.NoCheckQuery<T>(sql)` | `T` |
 | 1 つのテーブルを任意の条件で絞り込む場合 | `Tables.<Table>.Query().Where(...)` | 生成されるテーブルの `record` |
+| 生成された `record` 1 件を保存する場合 | `Tables.<Table>.Insert(record)` | 影響を受けた行数 |
+| 生成された `record` 1 件を保存して読み戻す場合 | `Tables.<Table>.InsertReturning(record)` | 生成されるテーブルの `record` |
+| 生成された `record` 1 件を主キーで更新・削除する場合 | `Tables.<Table>.Update(record)`、`Tables.<Table>.Delete(record)` | 影響を受けた行数 |
+| 条件に一致する行をまとめて削除する場合 | `Tables.<Table>.DeleteWhere(...)` | 影響を受けた行数 |
 
 `QueryDynamic(sql)` は `NoCheckQuery(sql)` の旧名です。新しいコードでは `NoCheckQuery` を使います。
+
+生成されるテーブルの `record` である `<Table>Row` も既存の型として扱えます。そのテーブルの列を取り出す
+SQL であれば、`Query<<Table>Row>(sql)` や `[Query<<Table>Row>(name, sql)]` でマッピングできます。
 
 ## ビルドが強制する規則
 
@@ -75,7 +83,7 @@ SQL は手で書きます。ビルドがそれを解析し、マイグレーシ�
 | `SqlSchema.Tables.<Table>.Name` | スキーマ修飾したテーブル名 |
 | `SqlSchema.Tables.<Table>.Columns.<Column>` | 引用符付きの列名 |
 | `<Table>Row` | テーブル 1 行を表す `public sealed record` |
-| `Tables.<Table>` | `Query()`、`All()`、`Where(...)` を持つテーブルオブジェクト |
+| `Tables.<Table>` | `Query()`、`All()`、`Where(...)`、`Insert(...)`、`InsertReturning(...)`、`Update(...)`、`Delete(...)`、`DeleteWhere(...)` を持つテーブルオブジェクト |
 | `Tables.<Table>.<Column>` | `Equal(value)` を持つ型付きの列 |
 | `<Container>.<Name>Result` | 名前付きクエリの結果 `record` |
 | `<Container>.<Name>Parameters` | 名前付きクエリ・コマンドのパラメーター `record` |

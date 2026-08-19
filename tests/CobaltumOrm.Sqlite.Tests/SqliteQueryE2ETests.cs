@@ -167,7 +167,7 @@ public sealed class SqliteQueryE2ETests
                 static _ => throw new InvalidOperationException("mapping failed"));
 
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => materializationFailure.Query(definition));
+                () => materializationFailure.Query(definition).ReadAsync());
             Assert.Equal("mapping failed", exception.Message);
             Assert.Equal(ConnectionState.Closed, materializationFailure.State);
         }
@@ -218,12 +218,13 @@ public sealed class SqliteQueryE2ETests
             "SELECT id, text_value FROM db_patterns ORDER BY id",
             static _ => { },
             static reader => new PatternRecord(reader.GetInt64(0), reader.GetString(1)));
-        var all = await connection.Query(definition);
+        var all = await connection.Query(definition).ReadAsync();
         var empty = await connection.Query(
-            new CobaltumQueryDefinition<PatternRecord>(
-                "SELECT id, text_value FROM db_patterns WHERE 0",
-                static _ => { },
-                static reader => new PatternRecord(reader.GetInt64(0), reader.GetString(1))));
+                new CobaltumQueryDefinition<PatternRecord>(
+                    "SELECT id, text_value FROM db_patterns WHERE 0",
+                    static _ => { },
+                    static reader => new PatternRecord(reader.GetInt64(0), reader.GetString(1))))
+            .ReadAsync();
 
         Assert.Equal(new long[] { 2, 3 }, mapped.Select(row => row.Id).ToArray());
         Assert.Equal(new long[] { 1, 2, 3 }, all.Select(row => row.Id).ToArray());
@@ -304,8 +305,8 @@ public sealed class SqliteQueryE2ETests
         var nullQuery = table.Query().Where(table.NullableText.Equal(null));
 
         Assert.DoesNotContain(hostileText, hostileQuery.Sql, StringComparison.Ordinal);
-        Assert.Equal(1L, Assert.Single(await connection.Query(hostileQuery)).Id);
-        Assert.Equal(2L, Assert.Single(await connection.Query(nullQuery)).Id);
+        Assert.Equal(1L, Assert.Single(await connection.Query(hostileQuery).ReadAsync()).Id);
+        Assert.Equal(2L, Assert.Single(await connection.Query(nullQuery).ReadAsync()).Id);
         Assert.Single(await connection.Query(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'db_patterns'").ReadAsync());
     }

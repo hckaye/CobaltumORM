@@ -218,8 +218,64 @@ public static Task<IReadOnlyList<AppUsersRow>> ReadFilteredAsync(
         .Where(Tables.Users.Id.Equal(id))
         .WhereIf(filterByEmail, () => Tables.Users.Email.Equal(email));
 
-    return connection.Query(query, transaction: null, cancellationToken);
+    return connection.Query(query, transaction: null).ReadAsync(cancellationToken);
 }
+```
+
+## Store a record without writing SQL
+
+`Tables.<Table>.Insert` builds an INSERT from one generated record. Identity columns are left out of
+the statement, so the database assigns them. `InsertReturning` runs the same INSERT with a
+`RETURNING` clause and materializes the stored record, including the assigned key. PostgreSQL,
+SQLite, and SQL Server get `InsertReturning`; MySQL and Oracle do not.
+
+<!-- snippet: record-insert -->
+```csharp
+public static async Task<AppUsersRow> AddUserAsync(
+    DbConnection connection,
+    string email,
+    DateTimeOffset createdAt,
+    CancellationToken cancellationToken = default)
+{
+    var stored = await connection
+        .Query(Tables.Users.InsertReturning(new AppUsersRow(0, email, null, createdAt)))
+        .ReadAsync(cancellationToken);
+
+    return stored[0];
+}
+```
+
+## Update or delete a record without writing SQL
+
+`Update` and `Delete` match one row by its primary key. `Update` writes every column that is not
+part of the primary key and not an identity column. `DeleteWhere` takes the same predicate as
+`Where` and removes every matching row. A table without a primary key gets `Insert` and
+`DeleteWhere` but no `Update` or `Delete`.
+
+<!-- snippet: record-update-delete -->
+```csharp
+public static Task<int> RenameUserAsync(
+    DbConnection connection,
+    AppUsersRow user,
+    string displayName,
+    CancellationToken cancellationToken = default) =>
+    connection
+        .Query(Tables.Users.Update(user with { DisplayName = displayName }))
+        .ExecuteAsync(cancellationToken);
+
+public static Task<int> RemoveUserAsync(
+    DbConnection connection,
+    AppUsersRow user,
+    CancellationToken cancellationToken = default) =>
+    connection.Query(Tables.Users.Delete(user)).ExecuteAsync(cancellationToken);
+
+public static Task<int> RemoveUsersByEmailAsync(
+    DbConnection connection,
+    string email,
+    CancellationToken cancellationToken = default) =>
+    connection
+        .Query(Tables.Users.DeleteWhere(Tables.Users.Email.Equal(email)))
+        .ExecuteAsync(cancellationToken);
 ```
 
 ## Run SQL the build cannot check

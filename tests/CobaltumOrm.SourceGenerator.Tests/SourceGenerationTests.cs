@@ -54,10 +54,9 @@ public sealed class SourceGenerationTests
                 var raw = connection.Query("SELECT id FROM accounts.users");
                 CobaltumRawQuery rawContract = raw;
                 var rows = await Queries.ByIdAsync(connection, 7, transaction, cancellationToken);
-                var tableRows = await connection.Query(
-                    TestApp.Generated.Tables.Users.Where(TestApp.Generated.Tables.Users.Id.Equal(7)),
-                    transaction,
-                    cancellationToken);
+                var tableRows = await connection
+                    .Query(TestApp.Generated.Tables.Users.Where(TestApp.Generated.Tables.Users.Id.Equal(7)), transaction)
+                    .ReadAsync(cancellationToken);
                 var nullableRows = await Queries.ByNameAsync(connection, null, transaction, cancellationToken);
                 return rows[0].DisplayName ?? tableRows[0].DisplayName ?? nullableRows[0].DisplayName;
             }
@@ -747,7 +746,7 @@ public sealed class SourceGenerationTests
                         .Query()
                         .Where(Generated.Tables.Users.Id.Equal(7))
                         .WhereIf(true, () => Generated.Tables.Users.Name.Equal("alice"));
-                    var rows = await connection.Query(query);
+                    var rows = await connection.Query(query).ReadAsync();
                     return rows.Count;
                 }
             }

@@ -31,6 +31,7 @@ For coding agents: start with [coding agent tools](docs/ai/agent-tools.md), then
 - [Command-line migration management](#command-line-migration-management)
 - [Explicit generation with the CLI](#explicit-generation-with-the-cli)
 - [Generated table types](#generated-table-types)
+- [Record `INSERT`, `UPDATE`, and `DELETE`](#record-insert-update-and-delete)
 - [Named queries](#named-queries)
 - [Result types for constant `Query` SQL](#result-types-for-constant-query-sql)
 - [Caller-supplied result types](#caller-supplied-result-types)
@@ -51,6 +52,7 @@ CobaltumORM lets applications write SQL explicitly while using type-safe data ma
 - An INSERT, UPDATE, DELETE, or TRUNCATE without RETURNING can be named with `[Query]`. The generated method returns the affected row count.
 - Renaming or deleting a schema object in a migration makes old `SqlSchema` references and SQL that uses the old name fail to compile.
   - The current checker supports part of the PostgreSQL syntax used for CRUD operations. It cannot check permissions, constraints, triggers, or outcomes that depend on stored data.
+- Generated table records build single-row `INSERT`, `UPDATE`, and `DELETE` statements, so simple writes need no SQL.
 - CobaltumORM does not provide EF Core-style change tracking or an equivalent to `SaveChanges`. Queries and commands are executed explicitly.
 
 ### Comparison with other .NET ORMs
@@ -728,7 +730,7 @@ A cache hit avoids applying the migrations again or running the SQL query parser
 
 Each table produces a `public sealed record` and a table object whose columns can be referenced with C# types. `[CobaltumTable]` records the SQL schema and table names. `[CobaltumColumn]` records each property SQL name, data type, nullability, primary key status, and default expression. When C# property names collide, the generated names use `_2`, `_3`, and subsequent suffixes. The schema name is included in the `record` name when different schemas contain tables with the same name.
 
-`Tables.Users` provides `Query()`, `All()`, and `Where(...)`. `Where(...)` and `WhereIf(...)` can be appended to the `CobaltumQueryDefinition<TRecord>` returned by `Query()` and `All()`. Values are passed as `DbParameter` instances instead of being concatenated into SQL. Adding filters does not change the result `record` type.
+`Tables.Users` provides `Query()`, `All()`, and `Where(...)`. `Where(...)` and `WhereIf(...)` can be appended to the `CobaltumQueryDefinition<TRecord>` returned by `Query()` and `All()`. Pass the result to `connection.Query(...)` and call `ReadAsync` to run it. Values are passed as `DbParameter` instances instead of being concatenated into SQL. Adding filters does not change the result `record` type.
 
 ```csharp
 using System.Collections.Generic;
@@ -745,10 +747,9 @@ public static class UsersReader
         DbTransaction? transaction = null,
         CancellationToken cancellationToken = default)
     {
-        return await connection.Query(
-            Tables.Users.All(),
-            transaction,
-            cancellationToken);
+        return await connection
+            .Query(Tables.Users.All(), transaction)
+            .ReadAsync(cancellationToken);
     }
 
     public static Task<IReadOnlyList<AppUsersRow>> ReadFilteredAsync(
@@ -766,15 +767,80 @@ public static class UsersReader
                 includeDisplayName,
                 () => Tables.Users.DisplayName.Equal(displayName));
 
-        return connection.Query(
-            query,
-            transaction,
-            cancellationToken);
+        return connection.Query(query, transaction).ReadAsync(cancellationToken);
     }
 }
 ```
 
 `AppUsersRow`, `Tables.Users`, `Id`, and `DisplayName` in this example are generated from the `app.users` schema in the sample. `id` has the C# type `int`. When the `WhereIf` condition is `false`, its function is not called. The filter is added only when the condition is `true`.
+
+## Record `INSERT`, `UPDATE`, and `DELETE`
+
+The same table object builds single-row write statements from a generated `record`. `connection.Query(...)` takes the statement and `ExecuteAsync` runs it, returning the affected row count. These members cover the cases where writing the SQL by hand adds nothing. Anything past one row matched by its primary key is written as SQL.
+
+| Member | Statement | Result |
+| --- | --- | --- |
+| `Insert(record)` | `INSERT` without identity columns | affected row count |
+| `InsertReturning(record)` | `INSERT` reporting the stored row | the table `record` |
+| `Update(record)` | `UPDATE` matched by primary key | affected row count |
+| `Delete(record)` | `DELETE` matched by primary key | affected row count |
+| `DeleteWhere(predicate)` | `DELETE` matched by one predicate | affected row count |
+
+```csharp
+using System;
+using System.Data.Common;
+using System.Threading;
+using System.Threading.Tasks;
+using CobaltumOrm;
+using CobaltumOrm.Sample.Generated;
+
+public static class UsersWriter
+{
+    public static async Task<AppUsersRow> AddAsync(
+        DbConnection connection,
+        string email,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await connection
+            .Query(Tables.Users.InsertReturning(
+                new AppUsersRow(0, email, null, DateTimeOffset.UtcNow)))
+            .ReadAsync(cancellationToken);
+
+        return stored[0];
+    }
+
+    public static Task<int> RenameAsync(
+        DbConnection connection,
+        AppUsersRow user,
+        string displayName,
+        CancellationToken cancellationToken = default) =>
+        connection
+            .Query(Tables.Users.Update(user with { DisplayName = displayName }))
+            .ExecuteAsync(cancellationToken);
+
+    public static Task<int> RemoveAsync(
+        DbConnection connection,
+        AppUsersRow user,
+        CancellationToken cancellationToken = default) =>
+        connection.Query(Tables.Users.Delete(user)).ExecuteAsync(cancellationToken);
+}
+```
+
+`Insert` leaves identity columns out of the statement, so the database assigns them. The `0` passed for `id` above is never sent. Every other column is written with the value held by the `record`, including columns that declare a SQL default.
+
+`InsertReturning` is generated for PostgreSQL and SQLite as `INSERT ... RETURNING`, and for SQL Server as `INSERT ... OUTPUT INSERTED.*`. MySQL and Oracle have no form CobaltumORM generates, so they get `Insert` only. A SQL Server table with triggers rejects `OUTPUT` without `INTO`; read the row back with a separate query in that case.
+
+`Update` writes every column that is neither part of the primary key nor an identity column, and matches the row by the full primary key. `Delete` matches the row the same way. A table without a primary key gets `Insert` and `DeleteWhere` but neither `Update` nor `Delete`, because no column identifies one row. A table whose columns are all part of the primary key gets no `Update`, because there is nothing left to write.
+
+`DeleteWhere` takes the predicate that `Where` takes, and the compared value becomes a `DbParameter`. It accepts one predicate. Deleting on more than one condition is written as SQL.
+
+```csharp
+await connection
+    .Query(Tables.Users.DeleteWhere(Tables.Users.Email.Equal(address)))
+    .ExecuteAsync(cancellationToken);
+```
+
+These statements are built from the schema the migrations produce, so renaming or dropping a column makes the affected call fail to compile. Concurrency, soft deletes, auditing, and batching are not handled. Use `Query` with SQL when a write needs any of them.
 
 ## Named queries
 
@@ -922,6 +988,8 @@ public sealed record ArrayView(
 Conversion handlers require checked `Query` SQL because the source CLR type must be known at build time. `NoCheckQuery<TResult>` continues to support `IValueHandler<TValue>`, which reads the column itself. To control the entire row, put `[ResultHandler<THandler>]` on the result type and implement `IResultHandler<TResult>`. A custom handler takes responsibility for the conversion it controls, while the SQL itself remains checked by `Query`.
 
 Handler types must have a public parameterless constructor. One instance is cached and called directly from generated code, so handlers must be stateless and thread-safe. Result mapping does not scan types or invoke members through reflection at runtime.
+
+A generated table `record` such as `AppUsersRow` can be used as `TResult`. The build writes the table records before the compiler runs, so a query that selects the columns of one table maps to its record without declaring a second type.
 
 ## Interpolated `Query`
 

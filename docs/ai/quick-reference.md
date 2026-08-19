@@ -12,6 +12,8 @@ and build errors are in [diagnostics.md](diagnostics.md).
 SQL is written by hand. The build parses it, checks it against the schema that the migrations
 produce, and generates the C# that executes it. No database connection is made during the build.
 There is no change tracking and no `SaveChanges`. Every query and command is executed explicitly.
+Generated table records carry INSERT, UPDATE, and DELETE for one row, which covers simple cases
+without SQL.
 
 ## Choosing a query API
 
@@ -25,8 +27,15 @@ There is no change tracking and no `SaveChanges`. Every query and command is exe
 | The SQL text is only known at runtime, or uses syntax the analyzer does not support | `connection.NoCheckQuery(sql)` | `CobaltumRawRow` |
 | Unchecked SQL mapped to an existing type | `connection.NoCheckQuery<T>(sql)` | `T` |
 | Selecting from one table with optional filters | `Tables.<Table>.Query().Where(...)` | the generated table record |
+| Storing one generated record | `Tables.<Table>.Insert(record)` | the affected row count |
+| Storing one generated record and reading it back | `Tables.<Table>.InsertReturning(record)` | the generated table record |
+| Updating or deleting one generated record by its primary key | `Tables.<Table>.Update(record)`, `Tables.<Table>.Delete(record)` | the affected row count |
+| Deleting every row matching a filter | `Tables.<Table>.DeleteWhere(...)` | the affected row count |
 
 `QueryDynamic(sql)` is the older name for `NoCheckQuery(sql)`. Write `NoCheckQuery` in new code.
+
+The generated table record `<Table>Row` counts as an existing type, so `Query<<Table>Row>(sql)` and
+`[Query<<Table>Row>(name, sql)]` map to it when the SQL selects that table's columns.
 
 ## Rules the build enforces
 
@@ -76,7 +85,7 @@ The generator writes these types into `CobaltumOrmGeneratedNamespace`, which def
 | `SqlSchema.Tables.<Table>.Name` | schema-qualified table name |
 | `SqlSchema.Tables.<Table>.Columns.<Column>` | quoted column name |
 | `<Table>Row` | `public sealed record` for one table row |
-| `Tables.<Table>` | table object with `Query()`, `All()`, and `Where(...)` |
+| `Tables.<Table>` | table object with `Query()`, `All()`, `Where(...)`, `Insert(...)`, `InsertReturning(...)`, `Update(...)`, `Delete(...)`, and `DeleteWhere(...)` |
 | `Tables.<Table>.<Column>` | typed column supporting `Equal(value)` |
 | `<Container>.<Name>Result` | result record for a named query |
 | `<Container>.<Name>Parameters` | parameter record for a named query or command |

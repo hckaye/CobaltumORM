@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
@@ -119,8 +120,48 @@ public static class AiGuideSamples
             .Where(Tables.Users.Id.Equal(id))
             .WhereIf(filterByEmail, () => Tables.Users.Email.Equal(email));
 
-        return connection.Query(query, transaction: null, cancellationToken);
+        return connection.Query(query, transaction: null).ReadAsync(cancellationToken);
     }
+    // </snippet>
+
+    // <snippet record-insert>
+    public static async Task<AppUsersRow> AddUserAsync(
+        DbConnection connection,
+        string email,
+        DateTimeOffset createdAt,
+        CancellationToken cancellationToken = default)
+    {
+        var stored = await connection
+            .Query(Tables.Users.InsertReturning(new AppUsersRow(0, email, null, createdAt)))
+            .ReadAsync(cancellationToken);
+
+        return stored[0];
+    }
+    // </snippet>
+
+    // <snippet record-update-delete>
+    public static Task<int> RenameUserAsync(
+        DbConnection connection,
+        AppUsersRow user,
+        string displayName,
+        CancellationToken cancellationToken = default) =>
+        connection
+            .Query(Tables.Users.Update(user with { DisplayName = displayName }))
+            .ExecuteAsync(cancellationToken);
+
+    public static Task<int> RemoveUserAsync(
+        DbConnection connection,
+        AppUsersRow user,
+        CancellationToken cancellationToken = default) =>
+        connection.Query(Tables.Users.Delete(user)).ExecuteAsync(cancellationToken);
+
+    public static Task<int> RemoveUsersByEmailAsync(
+        DbConnection connection,
+        string email,
+        CancellationToken cancellationToken = default) =>
+        connection
+            .Query(Tables.Users.DeleteWhere(Tables.Users.Email.Equal(email)))
+            .ExecuteAsync(cancellationToken);
     // </snippet>
 
     // <snippet no-check-query>
