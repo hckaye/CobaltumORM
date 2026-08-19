@@ -26,9 +26,9 @@ public sealed class AddCommandTests
         var project = File.ReadAllText(fixture.ApplicationProject);
         Assert.Contains("<TargetFramework>net10.0</TargetFramework>", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"Other.Package\" Version=\"1.2.3\" />", project, StringComparison.Ordinal);
-        Assert.Contains("<PackageReference Include=\"CobaltumOrm\" Version=\"1.0.1\" />", project, StringComparison.Ordinal);
-        Assert.Contains("<PackageReference Include=\"CobaltumOrm.Migrations\" Version=\"1.0.1\" />", project, StringComparison.Ordinal);
-        Assert.Contains("<PackageReference Include=\"CobaltumOrm.SourceGenerator\" Version=\"1.0.1\" PrivateAssets=\"all\" />", project, StringComparison.Ordinal);
+        Assert.Contains("<PackageReference Include=\"CobaltumOrm\" Version=\"2.0.0\" />", project, StringComparison.Ordinal);
+        Assert.Contains("<PackageReference Include=\"CobaltumOrm.Migrations\" Version=\"2.0.0\" />", project, StringComparison.Ordinal);
+        Assert.Contains("<PackageReference Include=\"CobaltumOrm.SourceGenerator\" Version=\"2.0.0\" PrivateAssets=\"all\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"Microsoft.Data.Sqlite\" Version=\"10.0.7\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"SQLitePCLRaw.bundle_e_sqlite3\" Version=\"2.1.12\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"SQLitePCLRaw.core\" Version=\"2.1.12\" />", project, StringComparison.Ordinal);
@@ -260,7 +260,7 @@ public sealed class AddCommandTests
     {
         using var fixture = new AddFixture();
         fixture.WriteApplication("Example.App", packageVersion: "9.9.9");
-        var migration = fixture.WriteMigration("Example.Database", "PostgreSql", "1.0.1");
+        var migration = fixture.WriteMigration("Example.Database", "PostgreSql", "2.0.0");
         var before = File.ReadAllBytes(fixture.ApplicationProject);
         using var output = new StringWriter();
         using var error = new StringWriter();
@@ -357,9 +357,9 @@ public sealed class AddCommandTests
         Assert.Contains("<PackageReference Include=\"CobaltumOrm.Migrations\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"CobaltumOrm.SourceGenerator\" PrivateAssets=\"all\" />", project, StringComparison.Ordinal);
         Assert.DoesNotContain("PackageReference Include=\"CobaltumOrm\" Version=", project, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm\" Version=\"1.0.1\" />", packages, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations\" Version=\"1.0.1\" />", packages, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.SourceGenerator\" Version=\"1.0.1\" />", packages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm\" Version=\"2.0.0\" />", packages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations\" Version=\"2.0.0\" />", packages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.SourceGenerator\" Version=\"2.0.0\" />", packages, StringComparison.Ordinal);
         Assert.Contains("<PackageVersion Include=\"Npgsql\" Version=\"10.0.3\" />", packages, StringComparison.Ordinal);
         Assert.Contains("<UnrelatedPackageSetting>keep</UnrelatedPackageSetting>", packages, StringComparison.Ordinal);
         Assert.Contains($"Updated {fixture.PackagesPath}", output.ToString(), StringComparison.Ordinal);
@@ -401,7 +401,7 @@ public sealed class AddCommandTests
     {
         using var fixture = new AddFixture();
         fixture.WriteApplication("Example.App");
-        fixture.WriteCentralPackages(("CobaltumOrm", "1.0.1"));
+        fixture.WriteCentralPackages(("CobaltumOrm", "2.0.0"));
         var migration = fixture.WriteMigration("Example.Database", "PostgreSql");
         using var output = new StringWriter();
         using var error = new StringWriter();
@@ -475,10 +475,10 @@ public sealed class AddCommandTests
         var packages = File.ReadAllText(fixture.PackagesPath);
         Assert.DoesNotContain("Version=", project, StringComparison.Ordinal);
         Assert.DoesNotContain("VersionOverride", project, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm\" Version=\"1.0.1\" />", packages, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations\" Version=\"1.0.1\" />", packages, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.SourceGenerator\" Version=\"1.0.1\" />", packages, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations.Sqlite\" Version=\"1.0.1\" />", packages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm\" Version=\"2.0.0\" />", packages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations\" Version=\"2.0.0\" />", packages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.SourceGenerator\" Version=\"2.0.0\" />", packages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations.Sqlite\" Version=\"2.0.0\" />", packages, StringComparison.Ordinal);
         Assert.Contains("<PackageVersion Include=\"Microsoft.Data.Sqlite\" Version=\"10.0.7\" />", packages, StringComparison.Ordinal);
         Assert.Contains("<PackageVersion Include=\"SQLitePCLRaw.bundle_e_sqlite3\" Version=\"2.1.12\" />", packages, StringComparison.Ordinal);
         Assert.Contains("<PackageVersion Include=\"SQLitePCLRaw.core\" Version=\"2.1.12\" />", packages, StringComparison.Ordinal);
@@ -513,9 +513,9 @@ public sealed class AddCommandTests
         var targetPackages = File.ReadAllText(fixture.PackagesPath);
         var migrationPackages = File.ReadAllText(migrationPackagesPath);
         var migrationProject = File.ReadAllText(migration);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm\" Version=\"1.0.1\" />", targetPackages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm\" Version=\"2.0.0\" />", targetPackages, StringComparison.Ordinal);
         Assert.Contains("<PackageVersion Include=\"Microsoft.Data.SqlClient\" Version=\"7.0.2\" />", targetPackages, StringComparison.Ordinal);
-        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations.SqlServer\" Version=\"1.0.1\" />", migrationPackages, StringComparison.Ordinal);
+        Assert.Contains("<PackageVersion Include=\"CobaltumOrm.Migrations.SqlServer\" Version=\"2.0.0\" />", migrationPackages, StringComparison.Ordinal);
         Assert.Contains("<PackageVersion Include=\"Microsoft.Data.SqlClient\" Version=\"7.0.2\" />", migrationPackages, StringComparison.Ordinal);
         Assert.DoesNotContain("Version=", migrationProject, StringComparison.Ordinal);
         Assert.Contains("<UnrelatedPackageSetting>keep</UnrelatedPackageSetting>", targetPackages, StringComparison.Ordinal);
@@ -580,8 +580,8 @@ public sealed class AddCommandTests
 
         Assert.Equal(0, exitCode);
         var project = File.ReadAllText(migration);
-        Assert.Contains("<PackageReference Include=\"CobaltumOrm\" Version=\"1.0.1\" />", project, StringComparison.Ordinal);
-        Assert.Contains("<PackageReference Include=\"CobaltumOrm.Migrations.PostgreSql\" Version=\"1.0.1\" />", project, StringComparison.Ordinal);
+        Assert.Contains("<PackageReference Include=\"CobaltumOrm\" Version=\"2.0.0\" />", project, StringComparison.Ordinal);
+        Assert.Contains("<PackageReference Include=\"CobaltumOrm.Migrations.PostgreSql\" Version=\"2.0.0\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"Npgsql\" Version=\"8.0.0\" />", project, StringComparison.Ordinal);
         Assert.DoesNotContain("VersionOverride", project, StringComparison.Ordinal);
         Assert.Equal(string.Empty, error.ToString());
@@ -672,7 +672,7 @@ public sealed class AddCommandTests
         Assert.Contains("<PackageReference Include=\"CobaltumOrm\" Version=\"1.2.3\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"CobaltumOrm.Migrations\" Version=\"1.2.3\" />", project, StringComparison.Ordinal);
         Assert.Contains("<PackageReference Include=\"CobaltumOrm.SourceGenerator\" Version=\"1.2.3\" PrivateAssets=\"all\" />", project, StringComparison.Ordinal);
-        Assert.DoesNotContain("Version=\"1.0.1\"", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("Version=\"2.0.0\"", project, StringComparison.Ordinal);
     }
 
     [Fact]
