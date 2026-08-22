@@ -911,6 +911,30 @@ public sealed class CompileTimeQueryBuildTests
     }
 
     [Fact]
+    public void CheckedExplicitGuidResultTypeBuilds()
+    {
+        var result = BuildFixture("""
+            using System;
+            using System.Data.Common;
+            using CobaltumOrm;
+
+            public sealed record DispatchCard(Guid ExternalId);
+
+            public static class Consumer
+            {
+                public static object Read(DbConnection connection) =>
+                    connection.Query<DispatchCard>("SELECT external_id FROM users").ReadAsync();
+            }
+            """);
+
+        Assert.True(result.Succeeded, result.Output);
+        var generated = File.ReadAllText(Directory
+            .EnumerateFiles(result.Directory, "CobaltumOrm.RawQueries.g.cs", SearchOption.AllDirectories)
+            .Single());
+        Assert.Contains("reader.GetFieldValue<global::System.Guid>", generated, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DirectExplicitResultAttributesAndHandlersGenerateDirectCalls()
     {
         var result = BuildFixture("""
@@ -1123,7 +1147,8 @@ public sealed class CompileTimeQueryBuildTests
                         .WithColumn("name").AsString().NotNullable()
                         .WithColumn("local_time").AsDateTime().NotNullable()
                         .WithColumn("document").AsJsonb().NotNullable()
-                        .WithColumn("big_id").AsInt64().NotNullable();
+                        .WithColumn("big_id").AsInt64().NotNullable()
+                        .WithColumn("external_id").AsGuid().NotNullable();
                 }
 
                 public override void Down()

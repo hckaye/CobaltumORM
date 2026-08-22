@@ -336,10 +336,13 @@ public sealed class SqliteMigrationAdapter : IMigrationDatabaseAdapter, IMigrati
         {
             case MigrationColumnType.Int16:
             case MigrationColumnType.Byte:
+                return "INT16";
             case MigrationColumnType.Int32:
+                return "INT32";
             case MigrationColumnType.Int64:
-            case MigrationColumnType.Boolean:
                 return "INTEGER";
+            case MigrationColumnType.Boolean:
+                return "BOOLEAN";
             case MigrationColumnType.Decimal:
             case MigrationColumnType.Currency:
                 return "NUMERIC";

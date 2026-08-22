@@ -137,6 +137,23 @@ public sealed class ProjectInspectionCommandTests
     }
 
     [Fact]
+    public async Task DoctorTreatsExplicitGenerationOutputAsConfigured()
+    {
+        using var fixture = new InspectionFixture();
+        fixture.Evaluation.CompileTimeQueriesEnabled = false;
+        fixture.Evaluation.ExplicitGeneration = true;
+
+        var result = await fixture.RunAsync("doctor", "--project", fixture.ProjectPath, "--format", "json");
+
+        Assert.Equal(0, result.ExitCode);
+        using var document = JsonDocument.Parse(result.Output);
+        var wiring = document.RootElement.GetProperty("checks").EnumerateArray()
+            .Single(check => check.GetProperty("id").GetString() == "cobaltumorm-wiring");
+        Assert.Equal("ok", wiring.GetProperty("status").GetString());
+        Assert.Contains("explicit generation", wiring.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DoctorReportsMissingSourceGeneratorWiringAsAnError()
     {
         using var fixture = new InspectionFixture();

@@ -20,9 +20,10 @@ public sealed class SqliteAdapterTests
         Assert.Equal(
             "CREATE TABLE \"widget\"\"items\" (" +
             "\"id\" INTEGER PRIMARY KEY AUTOINCREMENT, " +
-            "\"small_value\" INTEGER, " +
+            "\"small_value\" INT16, " +
+            "\"standard_value\" INT32, " +
             "\"large_value\" INTEGER, " +
-            "\"enabled\" INTEGER NOT NULL, " +
+            "\"enabled\" BOOLEAN NOT NULL, " +
             "\"amount\" NUMERIC, " +
             "\"single_value\" REAL, " +
             "\"double_value\" REAL, " +
@@ -196,6 +197,7 @@ public sealed class AllTypesMigration : Migration
         Create.Table("widget\"items")
             .WithColumn("id").AsInt64().PrimaryKey().Identity()
             .WithColumn("small_value").AsInt16()
+            .WithColumn("standard_value").AsInt32()
             .WithColumn("large_value").AsInt64()
             .WithColumn("enabled").AsBoolean().NotNullable()
             .WithColumn("amount").AsDecimal(18, 4)

@@ -48,6 +48,9 @@ internal sealed class ProjectEvaluation
     /// <summary>Whether the MSBuild transform is enabled for the evaluated target.</summary>
     public bool CompileTimeQueriesEnabled { get; set; } = true;
 
+    /// <summary>Whether the project imports output from cobaltum generate.</summary>
+    public bool ExplicitGeneration { get; set; }
+
     /// <summary>Properties made visible to source generators by MSBuild.</summary>
     public List<string> CompilerVisibleProperties { get; } = new();
 
@@ -147,6 +150,12 @@ internal sealed class ProjectEvaluation
                     evaluation.CompileTimeQueriesEnabled = !string.Equals(
                         value,
                         "false",
+                        StringComparison.OrdinalIgnoreCase);
+                    break;
+                case "explicitgeneration":
+                    evaluation.ExplicitGeneration = string.Equals(
+                        value,
+                        "true",
                         StringComparison.OrdinalIgnoreCase);
                     break;
                 case "compilervisibleproperty":

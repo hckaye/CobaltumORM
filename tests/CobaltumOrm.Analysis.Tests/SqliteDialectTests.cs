@@ -51,6 +51,8 @@ public sealed class SqliteDialectTests
     [InlineData("INTEGER", SqlValueKind.Int64)]
     [InlineData("BIGINT", SqlValueKind.Int64)]
     [InlineData("CHARINT", SqlValueKind.Int64)]
+    [InlineData("INT16", SqlValueKind.Int16)]
+    [InlineData("INT32", SqlValueKind.Int32)]
     [InlineData("VARCHAR(40)", SqlValueKind.String)]
     [InlineData("CLOB", SqlValueKind.String)]
     [InlineData("BLOB", SqlValueKind.Bytes)]
@@ -58,7 +60,7 @@ public sealed class SqliteDialectTests
     [InlineData("REAL", SqlValueKind.Double)]
     [InlineData("DOUBLE PRECISION", SqlValueKind.Double)]
     [InlineData("NUMERIC(18,4)", SqlValueKind.Decimal)]
-    [InlineData("BOOLEAN", SqlValueKind.Decimal)]
+    [InlineData("BOOLEAN", SqlValueKind.Bool)]
     public void MapsDeclaredTypesBySQLiteAffinity(string sqlType, SqlValueKind expected)
     {
         var mapper = new SqliteTypeMapper();
@@ -68,10 +70,10 @@ public sealed class SqliteDialectTests
     }
 
     [Theory]
-    [InlineData("int16", "INTEGER")]
-    [InlineData("int32", "INTEGER")]
+    [InlineData("int16", "INT16")]
+    [InlineData("int32", "INT32")]
     [InlineData("int64", "INTEGER")]
-    [InlineData("boolean", "INTEGER")]
+    [InlineData("boolean", "BOOLEAN")]
     [InlineData("decimal", "NUMERIC")]
     [InlineData("float", "REAL")]
     [InlineData("double", "REAL")]

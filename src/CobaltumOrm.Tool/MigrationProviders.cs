@@ -29,6 +29,7 @@ internal static class MigrationProviders
                 new RuntimePackage("Microsoft.Data.Sqlite", "10.0.7"),
                 new RuntimePackage("SQLitePCLRaw.bundle_e_sqlite3", "2.1.12"),
                 new RuntimePackage("SQLitePCLRaw.core", "2.1.12"),
+                new RuntimePackage("SQLitePCLRaw.lib.e_sqlite3", "2.1.12"),
             },
             ["SqlServer"] = new[]
             {

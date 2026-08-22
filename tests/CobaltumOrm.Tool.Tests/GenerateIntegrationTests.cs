@@ -257,6 +257,51 @@ public sealed class GenerateIntegrationTests
     }
 
     [Fact]
+    public async Task DoctorUsesTheProviderFromAnExternalMigrationProject()
+    {
+        using var fixture = new BuildFixture();
+        fixture.WriteDefaultSources(includeLocalMigration: false);
+        fixture.WriteMigrationProject(MigrationSource, "Sqlite");
+        var build = fixture.RunDotnet("build", fixture.ProjectPath, "-c", "Release", "--nologo");
+        Assert.True(build.ExitCode == 0, string.Join("\n", build.Output));
+
+        var doctor = await fixture.InspectAsync("doctor", "--format", "json", "--no-restore");
+
+        Assert.True(doctor.ExitCode == 0, doctor.Output + doctor.Error);
+        using var document = JsonDocument.Parse(doctor.Output);
+        var provider = document.RootElement.GetProperty("checks").EnumerateArray()
+            .Single(check => check.GetProperty("id").GetString() == "database-provider");
+        Assert.Equal("ok", provider.GetProperty("status").GetString());
+        Assert.Contains("Sqlite", provider.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DoctorRecognizesAnImportedExplicitGenerationPropsFile()
+    {
+        using var fixture = new BuildFixture();
+        fixture.WriteDefaultSources();
+        var output = Path.Combine(fixture.Root, "ExplicitOutput");
+        var generation = await fixture.GenerateAsync("--output-mode", "directory", "--output", output);
+        Assert.Equal(0, generation.ExitCode);
+
+        var project = File.ReadAllText(fixture.ProjectPath);
+        File.WriteAllText(
+            fixture.ProjectPath,
+            project.Replace(
+                "</Project>",
+                $"  <Import Project=\"{SecurityElement.Escape(Path.Combine(output, GenerationOutputWriter.PropsFileName))}\" />{Environment.NewLine}</Project>",
+                StringComparison.Ordinal));
+
+        var doctor = await fixture.InspectAsync("doctor", "--format", "json", "--no-restore");
+
+        Assert.Equal(0, doctor.ExitCode);
+        using var document = JsonDocument.Parse(doctor.Output);
+        var wiring = document.RootElement.GetProperty("checks").EnumerateArray()
+            .Single(check => check.GetProperty("id").GetString() == "cobaltumorm-wiring");
+        Assert.Equal("ok", wiring.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task InspectRequiresFrameworkForARealMultiTargetProject()
     {
         using var fixture = new BuildFixture();
@@ -349,7 +394,7 @@ public sealed class GenerateIntegrationTests
                 """);
         }
 
-        public void WriteMigrationProject(string migrationSource)
+        public void WriteMigrationProject(string migrationSource, string provider = "PostgreSql")
         {
             var directory = Path.Combine(Root, "Migrations.Project");
             Directory.CreateDirectory(Path.Combine(directory, "Migrations"));
@@ -359,6 +404,7 @@ public sealed class GenerateIntegrationTests
                   <PropertyGroup>
                     <TargetFramework>net10.0</TargetFramework>
                     <CobaltumOrmMigrationProject>true</CobaltumOrmMigrationProject>
+                    <CobaltumOrmDatabaseProvider>{provider}</CobaltumOrmDatabaseProvider>
                   </PropertyGroup>
                   <ItemGroup>
                     <ProjectReference Include="{Escape(RepositoryProject("CobaltumOrm.Migrations"))}" />

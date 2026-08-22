@@ -138,6 +138,24 @@ public sealed class SqliteTypeMapper : ISqlTypeMapper
         }
 
         var normalized = SqliteNormalizeType(sqlType);
+        // CobaltumORM migrations use these declared types to retain the C# type
+        // selected by the migration. They all have SQLite INTEGER affinity, but
+        // they let query analysis distinguish a Boolean or Int32 column from an
+        // arbitrary INTEGER column, which maps to Int64.
+        switch (normalized)
+        {
+            case "BOOLEAN":
+            case "BOOL":
+                kind = SqlValueKind.Bool;
+                return true;
+            case "INT16":
+                kind = SqlValueKind.Int16;
+                return true;
+            case "INT32":
+                kind = SqlValueKind.Int32;
+                return true;
+        }
+
         // SQLite applies these tests in this order. In particular, a name such
         // as CHARINT has INTEGER affinity because it contains INT.
         if (SqliteHasAffinityMarker(normalized, "INT"))
@@ -224,10 +242,13 @@ public sealed class SqliteTypeMapper : ISqlTypeMapper
         switch (logicalType.Trim().ToLowerInvariant())
         {
             case "int16":
+                return "INT16";
             case "int32":
+                return "INT32";
             case "int64":
-            case "boolean":
                 return "INTEGER";
+            case "boolean":
+                return "BOOLEAN";
             case "decimal":
                 return "NUMERIC";
             case "float":

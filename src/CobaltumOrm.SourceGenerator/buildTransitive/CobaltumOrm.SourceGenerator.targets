@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <_CobaltumOrmDatabaseProviderWasExplicit Condition="'$(CobaltumOrmDatabaseProvider)' != ''">true</_CobaltumOrmDatabaseProviderWasExplicit>
     <CobaltumOrmDatabaseProvider Condition="'$(CobaltumOrmDatabaseProvider)' == ''">PostgreSql</CobaltumOrmDatabaseProvider>
     <CobaltumOrmAnalysisCache Condition="'$(CobaltumOrmAnalysisCache)' == ''">true</CobaltumOrmAnalysisCache>
     <!-- Migration projects define migrations, not compile-time queries. Skip the
@@ -62,9 +63,11 @@
     <ItemGroup>
       <_CobaltumOrmMigrationInput Include="$(MSBuildProjectDirectory)/Migrations/**/*.cs">
         <CobaltumOrmInputKind>CSharp</CobaltumOrmInputKind>
+        <CobaltumOrmDatabaseProvider>$(CobaltumOrmDatabaseProvider)</CobaltumOrmDatabaseProvider>
       </_CobaltumOrmMigrationInput>
       <_CobaltumOrmMigrationInput Include="$(MSBuildProjectDirectory)/Migrations/V*__*.sql">
         <CobaltumOrmInputKind>Sql</CobaltumOrmInputKind>
+        <CobaltumOrmDatabaseProvider>$(CobaltumOrmDatabaseProvider)</CobaltumOrmDatabaseProvider>
       </_CobaltumOrmMigrationInput>
     </ItemGroup>
   </Target>
@@ -78,12 +81,23 @@
       <Output TaskParameter="TargetOutputs" ItemName="_CobaltumOrmMigrationProjectInput" />
     </MSBuild>
     <ItemGroup>
+      <_CobaltumOrmExternalMigrationProvider Include="@(_CobaltumOrmMigrationProjectInput->'%(CobaltumOrmDatabaseProvider)')"
+                                                   Condition="'%(CobaltumOrmDatabaseProvider)' != ''" />
       <_CobaltumOrmExternalMigrationSource Include="@(_CobaltumOrmMigrationProjectInput)"
                                            Condition="'%(CobaltumOrmInputKind)' == 'CSharp' and Exists('%(FullPath)')" />
       <_CobaltumOrmExternalMigrationSql Include="@(_CobaltumOrmMigrationProjectInput)"
                                         Condition="'%(CobaltumOrmInputKind)' == 'Sql' and Exists('%(FullPath)')" />
       <AdditionalFiles Include="@(_CobaltumOrmExternalMigrationSource);@(_CobaltumOrmExternalMigrationSql)" />
     </ItemGroup>
+    <RemoveDuplicates Inputs="@(_CobaltumOrmExternalMigrationProvider)">
+      <Output TaskParameter="Filtered" ItemName="_CobaltumOrmDistinctExternalMigrationProvider" />
+    </RemoveDuplicates>
+    <PropertyGroup>
+      <_CobaltumOrmExternalMigrationProviders>@(_CobaltumOrmDistinctExternalMigrationProvider)</_CobaltumOrmExternalMigrationProviders>
+      <CobaltumOrmDatabaseProvider Condition="'$(_CobaltumOrmDatabaseProviderWasExplicit)' != 'true' and '$(_CobaltumOrmExternalMigrationProviders)' != ''">$(_CobaltumOrmExternalMigrationProviders)</CobaltumOrmDatabaseProvider>
+    </PropertyGroup>
+    <Error Condition="$([System.String]::Copy('$(_CobaltumOrmExternalMigrationProviders)').Contains(';'))"
+           Text="CobaltumOrmMigrationProjectReference projects must use one database provider." />
   </Target>
 
   <Target Name="CobaltumOrmCollectTransformInputs"

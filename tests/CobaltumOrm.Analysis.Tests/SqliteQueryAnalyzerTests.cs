@@ -75,6 +75,28 @@ public sealed class SqliteQueryAnalyzerTests
         Assert.Equal("long", parameter.ClrType);
     }
 
+    [Theory]
+    [InlineData("available = true")]
+    [InlineData("available")]
+    [InlineData("available IS TRUE")]
+    public void PreservesBooleanAndInt32MigrationTypesInQueries(string predicate)
+    {
+        var schema = new DatabaseSchema(new[]
+        {
+            new Table("items", new[]
+            {
+                new Column("price_cents", "INT32"),
+                new Column("available", "BOOLEAN"),
+            }),
+        });
+
+        var result = new SqliteQueryAnalyzer().Analyze(
+            schema,
+            "SELECT price_cents, available FROM items WHERE " + predicate);
+
+        SqliteAssertColumns(result, ("price_cents", "int"), ("available", "bool"));
+    }
+
     [Fact]
     public void UsesSQLiteNumericAggregateResultRules()
     {

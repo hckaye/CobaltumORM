@@ -591,6 +591,79 @@ public sealed class SourceGenerationTests
     }
 
     [Fact]
+    public void MapsPostgreSqlUuidToGuidInAnExplicitRawQueryResult()
+    {
+        const string source = """
+            using System;
+            using System.Data.Common;
+            using CobaltumOrm;
+            using CobaltumOrm.Migrations;
+
+            namespace TestApp;
+
+            [Migration(1)]
+            public sealed class CreateDispatchCardsMigration : Migration
+            {
+                public override void Up() =>
+                    Create.Table("dispatch_cards")
+                        .WithColumn("id").AsGuid().NotNullable();
+
+                public override void Down() => Delete.Table("dispatch_cards");
+            }
+
+            public sealed record DispatchCard(Guid Id);
+
+            public static class Consumer
+            {
+                public static object Read(DbConnection connection) =>
+                    connection.Query<DispatchCard>("SELECT id FROM dispatch_cards").ReadAsync();
+            }
+            """;
+
+        var result = GeneratorTestHost.Run(source, databaseProvider: "PostgreSql");
+
+        AssertNoErrors(result);
+        Assert.Contains("reader.GetFieldValue<global::System.Guid>", result.GeneratedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MapsSqliteBooleanAndInt32MigrationsInAnExplicitRawQueryResult()
+    {
+        const string source = """
+            using System.Data.Common;
+            using CobaltumOrm;
+            using CobaltumOrm.Migrations;
+
+            namespace TestApp;
+
+            [Migration(1)]
+            public sealed class CreateItemsMigration : Migration
+            {
+                public override void Up() =>
+                    Create.Table("items")
+                        .WithColumn("price_cents").AsInt32().NotNullable()
+                        .WithColumn("available").AsBoolean().NotNullable();
+
+                public override void Down() => Delete.Table("items");
+            }
+
+            public sealed record Item(int PriceCents, bool Available);
+
+            public static class Consumer
+            {
+                public static object Read(DbConnection connection) =>
+                    connection.Query<Item>("SELECT price_cents, available FROM items WHERE available = true").ReadAsync();
+            }
+            """;
+
+        var result = GeneratorTestHost.Run(source, databaseProvider: "Sqlite");
+
+        AssertNoErrors(result);
+        Assert.Contains("reader.GetFieldValue<global::System.Int32>", result.GeneratedText, StringComparison.Ordinal);
+        Assert.Contains("reader.GetFieldValue<global::System.Boolean>", result.GeneratedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GeneratedTablesExposeTheTypedQueryChainAndReserveQueryColumnNames()
     {
         const string source = """

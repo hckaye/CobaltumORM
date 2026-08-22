@@ -73,6 +73,7 @@ public sealed class ExternalMigrationProjectBuildTests
                     <TargetFramework>net10.0</TargetFramework>
                     <RootNamespace>Example.Database.Migrations</RootNamespace>
                     <CobaltumOrmMigrationProject>true</CobaltumOrmMigrationProject>
+                    <CobaltumOrmDatabaseProvider>Sqlite</CobaltumOrmDatabaseProvider>
                     <CobaltumOrmGeneratedNamespace>Example.Database.Migrations.Generated</CobaltumOrmGeneratedNamespace>
                   </PropertyGroup>
                   <ItemGroup>
@@ -83,6 +84,10 @@ public sealed class ExternalMigrationProjectBuildTests
                     <CobaltumOrmCompilerTaskAssembly>{{compiler}}</CobaltumOrmCompilerTaskAssembly>
                   </PropertyGroup>
                   <Import Project="{{targets}}" />
+                  <Target Name="VerifyExternalMigrationProvider" BeforeTargets="CobaltumOrmCollectTransformInputs">
+                    <Error Condition="'$(CobaltumOrmDatabaseProvider)' != 'Sqlite'"
+                           Text="The query project did not inherit the external migration provider." />
+                  </Target>
                 </Project>
                 """);
 

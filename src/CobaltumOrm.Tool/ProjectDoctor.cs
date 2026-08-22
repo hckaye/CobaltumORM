@@ -112,6 +112,16 @@ internal static class ProjectDoctor
 
         if (!evaluation.CompileTimeQueriesEnabled)
         {
+            if (evaluation.ExplicitGeneration)
+            {
+                return new DoctorCheck(
+                    "cobaltumorm-wiring",
+                    DoctorStatus.Ok,
+                    "CobaltumORM explicit generation output is configured for this target.",
+                    null,
+                    SetupHelpUri);
+            }
+
             return new DoctorCheck(
                 "cobaltumorm-wiring",
                 DoctorStatus.Warning,

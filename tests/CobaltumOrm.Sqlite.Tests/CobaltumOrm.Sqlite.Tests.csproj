@@ -7,9 +7,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
     <!-- Microsoft.Data.Sqlite 10.0.7 pins SQLitePCLRaw 2.1.11. Override that
-         transitive pin with the fixed 2.1.12 bundle and core packages. -->
+         transitive pin with fixed 2.1.12 packages. -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="SQLitePCLRaw.core" Version="2.1.12" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">

@@ -26,6 +26,8 @@
     </MSBuild>
 
     <ItemGroup>
+      <_CobaltumOrmGenerateMigrationProvider Include="@(_CobaltumOrmGenerateMigrationInput->'%(CobaltumOrmDatabaseProvider)')"
+                                               Condition="'%(CobaltumOrmDatabaseProvider)' != ''" />
       <_CobaltumOrmGeneratePackageReference Include="@(PackageReference)"
                                            Condition="'%(PackageReference.Identity)' == 'CobaltumOrm' or $([System.String]::Copy('%(PackageReference.Identity)').ToLowerInvariant().StartsWith('cobaltumorm.'))" />
       <_CobaltumOrmGenerateCentralPackageVersion Include="@(PackageVersion)"
@@ -40,6 +42,15 @@
       <_CobaltumOrmGenerateCompile Include="@(Compile)"
                                    Condition="'%(Compile.Extension)' == '.cs' and '%(Compile.AutoGen)' != 'true' and '%(Compile.DesignTime)' != 'true' and '%(Compile.CobaltumOrmTransformed)' != 'true'" />
     </ItemGroup>
+    <RemoveDuplicates Inputs="@(_CobaltumOrmGenerateMigrationProvider)">
+      <Output TaskParameter="Filtered" ItemName="_CobaltumOrmDistinctGenerateMigrationProvider" />
+    </RemoveDuplicates>
+    <PropertyGroup>
+      <_CobaltumOrmGenerateMigrationProviders>@(_CobaltumOrmDistinctGenerateMigrationProvider)</_CobaltumOrmGenerateMigrationProviders>
+      <CobaltumOrmDatabaseProvider Condition="'$(_CobaltumOrmDatabaseProviderWasExplicit)' != 'true' and '$(_CobaltumOrmGenerateMigrationProviders)' != ''">$(_CobaltumOrmGenerateMigrationProviders)</CobaltumOrmDatabaseProvider>
+    </PropertyGroup>
+    <Error Condition="$([System.String]::Copy('$(_CobaltumOrmGenerateMigrationProviders)').Contains(';'))"
+           Text="CobaltumOrmMigrationProjectReference projects must use one database provider." />
 
     <ItemGroup>
       <_CobaltumOrmGenerationLine Include="project=$(MSBuildProjectFullPath)" />
@@ -59,6 +70,7 @@
       <_CobaltumOrmGenerationLine Include="analysiscachedirectory=$(_CobaltumOrmAnalysisCacheDirectory)" />
       <_CobaltumOrmGenerationLine Include="compilertaskassembly=$(CobaltumOrmCompilerTaskAssembly)" />
       <_CobaltumOrmGenerationLine Include="compiletimequeries=$(CobaltumOrmCompileTimeQueries)" />
+      <_CobaltumOrmGenerationLine Include="explicitgeneration=$(CobaltumOrmExplicitGeneration)" />
       <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateCompile->'compile=%(FullPath)')" />
       <_CobaltumOrmGenerationLine Include="@(ReferencePath->'reference=%(FullPath)')" />
       <_CobaltumOrmGenerationLine Include="@(_CobaltumOrmGenerateAdditionalFile->'additionalfile=%(FullPath)')" />

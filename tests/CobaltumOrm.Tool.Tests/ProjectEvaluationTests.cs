@@ -31,6 +31,7 @@ public sealed class ProjectEvaluationTests
             "sourcegenerator=/packages/CobaltumOrm.SourceGenerator.dll",
             "compilertaskassembly=/packages/CobaltumOrm.Compiler.dll",
             "compiletimequeries=false",
+            "explicitgeneration=true",
             "compilervisibleproperty=CobaltumOrmGeneratedNamespace",
             "compile=/src/App/Program.cs",
             "compile=/src/App/Queries.cs",
@@ -69,6 +70,7 @@ public sealed class ProjectEvaluationTests
         Assert.Equal(new[] { "/packages/CobaltumOrm.SourceGenerator.dll" }, evaluation.CobaltumOrmSourceGeneratorPaths);
         Assert.Equal("/packages/CobaltumOrm.Compiler.dll", evaluation.CompilerTaskAssembly);
         Assert.False(evaluation.CompileTimeQueriesEnabled);
+        Assert.True(evaluation.ExplicitGeneration);
         Assert.Equal(new[] { "CobaltumOrmGeneratedNamespace" }, evaluation.CompilerVisibleProperties);
         Assert.Equal(
             new[] { "/src/App/Program.cs", "/src/App/Queries.cs" },

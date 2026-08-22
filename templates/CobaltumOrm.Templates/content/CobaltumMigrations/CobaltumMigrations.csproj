@@ -22,27 +22,28 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CobaltumOrm" Version="3.0.0" />
-    <PackageReference Include="CobaltumOrm.Migrations" Version="3.0.0" />
+    <PackageReference Include="CobaltumOrm" Version="3.1.0" />
+    <PackageReference Include="CobaltumOrm.Migrations" Version="3.1.0" />
     <PackageReference Include="CobaltumOrm.SourceGenerator"
-                      Version="3.0.0"
+                      Version="3.1.0"
                       PrivateAssets="all" />
     <!--#if (provider == "PostgreSql") -->
-    <PackageReference Include="CobaltumOrm.Migrations.PostgreSql" Version="3.0.0" />
+    <PackageReference Include="CobaltumOrm.Migrations.PostgreSql" Version="3.1.0" />
     <PackageReference Include="Npgsql" Version="10.0.3" />
     <!--#elseif (provider == "MySql") -->
-    <PackageReference Include="CobaltumOrm.Migrations.MySql" Version="3.0.0" />
+    <PackageReference Include="CobaltumOrm.Migrations.MySql" Version="3.1.0" />
     <PackageReference Include="MySqlConnector" Version="2.4.0" />
     <!--#elseif (provider == "Sqlite") -->
-    <PackageReference Include="CobaltumOrm.Migrations.Sqlite" Version="3.0.0" />
+    <PackageReference Include="CobaltumOrm.Migrations.Sqlite" Version="3.1.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
     <PackageReference Include="SQLitePCLRaw.core" Version="2.1.12" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
     <!--#elseif (provider == "SqlServer") -->
-    <PackageReference Include="CobaltumOrm.Migrations.SqlServer" Version="3.0.0" />
+    <PackageReference Include="CobaltumOrm.Migrations.SqlServer" Version="3.1.0" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />
     <!--#elseif (provider == "Oracle") -->
-    <PackageReference Include="CobaltumOrm.Migrations.Oracle" Version="3.0.0" />
+    <PackageReference Include="CobaltumOrm.Migrations.Oracle" Version="3.1.0" />
     <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.300" />
     <!--#endif -->
     <AdditionalFiles Include="Migrations/V*__*.sql" />
