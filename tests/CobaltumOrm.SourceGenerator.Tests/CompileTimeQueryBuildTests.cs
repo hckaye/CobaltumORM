@@ -925,7 +925,7 @@ public sealed class CompileTimeQueryBuildTests
                 public static object Read(DbConnection connection) =>
                     connection.Query<DispatchCard>("SELECT external_id FROM users").ReadAsync();
             }
-            """);
+            """, includeGuidColumn: true);
 
         Assert.True(result.Succeeded, result.Output);
         var generated = File.ReadAllText(Directory
@@ -1111,13 +1111,15 @@ public sealed class CompileTimeQueryBuildTests
     private static BuildResult BuildFixture(
         string source,
         string? databaseProvider = null,
-        bool analysisCacheEnabled = true) =>
-        CreateBuildFixture(source, databaseProvider, analysisCacheEnabled).Build();
+        bool analysisCacheEnabled = true,
+        bool includeGuidColumn = false) =>
+        CreateBuildFixture(source, databaseProvider, analysisCacheEnabled, includeGuidColumn).Build();
 
     private static BuildFixtureHandle CreateBuildFixture(
         string source,
         string? databaseProvider = null,
-        bool analysisCacheEnabled = true)
+        bool analysisCacheEnabled = true,
+        bool includeGuidColumn = false)
     {
         var repository = FindRepositoryRoot();
         var directory = Path.Combine(Path.GetTempPath(), "CobaltumOrm.BuildTests", Guid.NewGuid().ToString("N"));
@@ -1134,7 +1136,10 @@ public sealed class CompileTimeQueryBuildTests
                 public const string Suffix = "";
             }
             """);
-        File.WriteAllText(Path.Combine(directory, "Migrations.cs"), """
+        var guidColumn = includeGuidColumn
+            ? "\n                        .WithColumn(\"external_id\").AsGuid().NotNullable()"
+            : string.Empty;
+        File.WriteAllText(Path.Combine(directory, "Migrations.cs"), $$"""
             using CobaltumOrm.Migrations;
 
             [Migration(1, "create users")]
@@ -1147,8 +1152,7 @@ public sealed class CompileTimeQueryBuildTests
                         .WithColumn("name").AsString().NotNullable()
                         .WithColumn("local_time").AsDateTime().NotNullable()
                         .WithColumn("document").AsJsonb().NotNullable()
-                        .WithColumn("big_id").AsInt64().NotNullable()
-                        .WithColumn("external_id").AsGuid().NotNullable();
+                        .WithColumn("big_id").AsInt64().NotNullable(){{guidColumn}};
                 }
 
                 public override void Down()
