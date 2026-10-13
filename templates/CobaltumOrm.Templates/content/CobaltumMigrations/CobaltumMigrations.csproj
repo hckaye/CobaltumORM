@@ -46,6 +46,7 @@
     <PackageReference Include="CobaltumOrm.Migrations.Oracle" Version="3.1.0" />
     <PackageReference Include="Oracle.ManagedDataAccess.Core" Version="23.26.300" />
     <!--#endif -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="8.0.2" />
     <AdditionalFiles Include="Migrations/V*__*.sql" />
     <CompilerVisibleProperty Include="CobaltumOrmGeneratedNamespace" />
     <CompilerVisibleProperty Include="CobaltumOrmDatabaseProvider" />
