@@ -32,7 +32,7 @@
     <PackageReference Include="Npgsql" Version="10.0.3" />
     <!--#elseif (provider == "MySql") -->
     <PackageReference Include="CobaltumOrm.Migrations.MySql" Version="3.1.0" />
-    <PackageReference Include="MySqlConnector" Version="2.4.0" />
+    <PackageReference Include="MySqlConnector" Version="2.6.1" />
     <!--#elseif (provider == "Sqlite") -->
     <PackageReference Include="CobaltumOrm.Migrations.Sqlite" Version="3.1.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
